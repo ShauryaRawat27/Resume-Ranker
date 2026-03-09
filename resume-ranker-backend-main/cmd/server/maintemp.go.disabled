@@ -1,0 +1,575 @@
+package main
+
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"database/sql"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"golang.org/x/crypto/bcrypt"
+)
+
+
+
+// var db *sql.DB		//database access point
+
+var jobs []Job
+var jobsMutex sync.Mutex
+
+var allowedStatuses = map[string]bool{
+	"applied": true,
+	"shortlisted": true,
+	"rejected": true,
+	"interview": true,
+	"hired": true,
+}
+
+
+
+// func main(){
+
+	initS3()
+
+	http.HandleFunc("/auth/signup", signupHandler)
+	http.HandleFunc("/auth/login",loginHandler)
+	http.HandleFunc("/me",authMiddleware(meHandler))
+
+	http.HandleFunc("/jobs/",jobIdHandler)
+	http.HandleFunc("/jobs",authMiddleware(jobsHandler))
+
+	http.HandleFunc("/applications", authMiddleware(applicationsHandler))
+
+	// http.HandleFunc("/s3/presign-upload", presignUpHandler)
+	http.HandleFunc("/applications/",authMiddleware(applicationSubRouter))
+	// http.HandleFunc("/applications/",authMiddleware(downloadResumeHandler))
+	
+
+	var err error
+
+	db,err = sql.Open(			//sql.Open -  Prepares a conncn pool || pgx -driver || its like saving the phone number but not dialing it
+		"pgx",
+		"postgres://localhost/resume_ranker?sslmode=disable",
+	)					
+	if err!=nil {
+		log.Fatal(err)
+	}
+
+	if err = db.Ping(); err!=nil{  //Ping() - verifies whether DB is reachable or not ||| Actually initiates the connection(TCP)
+		log.Fatal(err)				//Fatal() - crash fast if misconfigured (good practice)
+	}
+
+	http.ListenAndServe(":8080", nil)
+
+}
+
+func applicationSubRouter(w http.ResponseWriter,r *http.Request){
+	path := r.URL.Path
+
+	if strings.HasSuffix(path,"/resume/presign"){
+		presignApplicationResumeUpload(w,r)
+		return
+	}
+
+	if strings.HasSuffix(path,"/resume/confirm") && r.Method == http.MethodPost{
+		confirmResumeUploadHandler(w,r)
+		return
+	}
+
+	if strings.HasSuffix(path,"status") && r.Method == http.MethodPatch{
+		updateApplicationStatusHandler(w,r)
+		return
+	}
+
+	if strings.HasSuffix(path,"/resume") && r.Method == http.MethodGet{
+		downloadResumeHandler(w,r)
+		return
+	}
+
+
+	http.Error(w,"NOT FOUND",http.StatusNotFound)
+} 
+
+
+func jobIdHandler(w http.ResponseWriter, r *http.Request){
+	if r.Method != http.MethodGet{
+		http.Error(w,"Method Not Allowed",http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path,"/jobs/")
+
+	if id == ""{
+		http.Error(w,"JOB ID REQUIRED",http.StatusBadRequest)
+		return
+	}
+
+	var job Job
+
+	err:= db.QueryRow(
+		`SELECT
+			id,
+			title,
+			description,
+			recruiter_id,
+			status,
+			deadline,
+			created_at
+		FROM jobs
+		WHERE id = $1`,  //$1->PLACEHOLDER
+		id,
+	).Scan(
+		&job.ID,
+		&job.Title,
+		&job.Description,
+		&job.RecruiterID,
+		&job.Status,
+		&job.Deadline,
+		&job.CreatedAt,
+	)
+
+	if err == sql.ErrNoRows{
+		http.Error(w,"JOB NOT FOUND",http.StatusNotFound)
+		return
+	}
+
+	if err != nil {
+		http.Error(w,"FAILED TO FETCH JOB",http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(job)
+}
+
+
+
+func applyJobHandler(w http.ResponseWriter, r *http.Request){
+	if r.Method != http.MethodPost{
+		http.Error(w,"METHOD NOT ALLOWED",http.StatusMethodNotAllowed)
+		return
+	}
+
+	role, ok := r.Context().Value("role").(string)
+
+	if !ok {
+		http.Error(w,"UNAUTHORIZED",http.StatusUnauthorized)
+		return
+	}
+
+	if role!= "candidate"{
+		http.Error(w,"FORBIDDEN: CANDIDATES ONLY",http.StatusForbidden)
+		return
+	}
+
+	candidateID, ok := r.Context().Value("user_id").(string)
+	if !ok {
+		http.Error(w, "UNAUTHORIZED", http.StatusUnauthorized)
+		return
+	}
+
+	var input struct {
+		JobID string `json:"job_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w,"INVALID REQUEST BODY",http.StatusBadRequest)
+		return
+	}
+
+	appID := uuid.NewString()
+
+	_, err := db.Exec(`
+		INSERT INTO applications (id, job_id, candidate_id,status)
+		VALUES ($1, $2, $3,'applied')
+	`, appID, input.JobID, candidateID)
+
+	if err!= nil {
+
+		if strings.Contains(err.Error(),"unique"){ // THIS HANDLES DUPLICATES
+			http.Error(w,"ALREADY APPLIED TO THIS JOB",http.StatusConflict)
+			return
+		}
+
+		log.Println("APPLY JOB ERROR: ",err)
+		http.Error(w,"FAILED TO APPLY",http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"application_id": appID,
+	})
+}
+
+func listApplicationHandler(w http.ResponseWriter, r *http.Request){
+	if r.Method != http.MethodGet{
+		http.Error(w,"METHOD NOT ALLOWED",http.StatusMethodNotAllowed)
+		return
+	}
+
+	role, ok := r.Context().Value("role").(string)
+
+	if !ok{
+		http.Error(w,"UNAUTHORIZED",http.StatusUnauthorized)
+		return
+	}
+
+	if role != "recruiter"{
+		http.Error(w,"FORBIDDEN: RECRUITERS ONLY",http.StatusForbidden)
+		return
+	}
+
+	recruiterID, ok := r.Context().Value("user_id").(string)
+
+	if !ok{
+		http.Error(w,"UNAUTHORIZED",http.StatusUnauthorized)
+		return
+	}
+
+	jobID := r.URL.Query().Get("job_id")
+
+	var rows *sql.Rows
+	var err error
+
+	if jobID != "" {
+		
+		rows, err = db.Query(`
+			SELECT a.id, a.job_id, a.candidate_id, a.applied_at
+			FROM applications a
+			JOIN jobs j ON a.job_id = j.id
+			WHERE j.recruiter_id = $1 AND j.id = $2
+		`, recruiterID, jobID)
+	} else {
+		
+		rows, err = db.Query(`
+			SELECT a.id, a.job_id, a.candidate_id, a.applied_at
+			FROM applications a
+			JOIN jobs j ON a.job_id = j.id
+			WHERE j.recruiter_id = $1
+		`, recruiterID)
+	}
+
+	if err != nil {
+		log.Println("LIST APPLICATIONS ERROR:",err)
+		http.Error(w,"FAILED TO FETCH APPLICATIONS",http.StatusInternalServerError)
+		return
+	}
+
+	defer rows.Close() //if you dot call this the DB conncn stays open
+					   //defer - tells go to run this line later when the func is about to finish
+	
+
+	type ApplicationResponse struct{
+		ApplicationID string    `json:"application_id"`
+		JobID         string    `json:"job_id"`
+		CandidateID   string    `json:"candidate_id"`
+		AppliedAt     time.Time `json:"applied_at"` 
+	}
+
+ var applications  []ApplicationResponse
+
+	for rows.Next(){
+		var app ApplicationResponse
+		if err := rows.Scan(&app.ApplicationID,&app.JobID,&app.CandidateID,&app.AppliedAt); err != nil{
+			log.Println("ROW SCAN ERROR:",err)
+			continue
+		}
+		applications = append(applications,app)
+	}
+
+	w.Header().Set("Content-Type","application/json")
+	json.NewEncoder(w).Encode(applications)
+
+
+
+}
+
+func applicationsHandler(w http.ResponseWriter, r *http.Request){
+	switch r.Method {
+	case http.MethodGet:
+		listApplicationHandler(w,r)
+	case http.MethodPost:
+		applyJobHandler(w,r)
+	
+default:
+	http.Error(w,"METHOD NOT ALLOWED",http.StatusMethodNotAllowed)
+}
+}
+
+
+// func presignUpHandler(w http.ResponseWriter, r *http.Request){
+// 	key := "resumes/test/resume.pdf" // FULL FILENAME INSIDE THE BUCKET
+
+// 	presigner := s3.NewPresignClient(s3Client) //SIGNS s3 REQUEST, s3CLIENT->knows: your AWS account || your IAM permissions||your region
+//  //Create a presigner that uses my AWS identity (s3Client).
+
+// 	req, err := presigner.PresignPutObject(
+// 		context.TODO(),
+// 		&s3.PutObjectInput{
+// 			Bucket: &bucketName,
+// 			Key: &key,
+// 		}, //THIS DESCRIBES AN s3 UPLOAD REQUEST 
+// 		//THIS GENERATES AN UPLOAD URL WHICH IS STORED IN REQ.URL
+// 	)
+
+// 	if err != nil{
+// 		http.Error(w,"FAILED TO GENERATE SIGNED URL",http.StatusInternalServerError)
+// 		return
+// 	}
+
+// 	json.NewEncoder(w).Encode(map[string]string{
+// 		"upload_url": req.URL,
+// 		"s3_key": key,
+// 	})
+// }
+
+func downloadResumeHandler(w http.ResponseWriter, r *http.Request){
+	role, ok := r.Context().Value("role").(string)
+
+	if !ok || role != "recruiter"{
+		http.Error(w,"FORBIDDEN",http.StatusForbidden)
+		return
+	}
+
+	recruiterID := r.Context().Value("user_id").(string)
+
+	parts := strings.Split(r.URL.Path,"/")
+	if len(parts) < 4{
+		http.Error(w,"INVALID URL",http.StatusBadRequest)
+		return
+	}
+
+	applicationID := parts[2]
+
+	var s3Key string
+	err := db.QueryRow(`
+		SELECT a.resume_url
+		FROM applications a
+		JOIN jobs j ON a.job_id = j.id
+		WHERE a.id = $1 AND j.recruiter_id = $2
+	`, applicationID, recruiterID).Scan(&s3Key)
+
+	if err!=nil {
+		fmt.Print(err)
+		http.Error(w,"APPLICATION NOT FOUND",http.StatusNotFound)
+		return
+	}
+
+	presigner := s3.NewPresignClient(s3Client)
+
+	req, err := presigner.PresignGetObject(
+		context.TODO(),
+		&s3.GetObjectInput{
+			Bucket: &bucketName,
+			Key: &s3Key,
+		},
+		s3.WithPresignExpires(10*time.Minute),
+	)
+
+	if err!= nil{
+		http.Error(w,"FAILED TO GENERATE DOWNLOAD URL",http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"download_url":req.URL,
+	})
+}
+
+func presignApplicationResumeUpload(w http.ResponseWriter, r *http.Request){
+
+	log.Println("JWT user_id:", r.Context().Value("user_id"))
+log.Println("JWT role:", r.Context().Value("role"))
+log.Println("Full path:", r.URL.Path)
+
+	role, ok := r.Context().Value("role").(string)
+	if !ok || role!="candidate"{
+		http.Error(w,"FORBIDDEN",http.StatusForbidden)
+		return
+	}
+
+	candidateID := r.Context().Value("user_id").(string)
+
+
+	parts := strings.Split(r.URL.Path,"/")
+	if len(parts) < 5{
+		http.Error(w,"INVALID URL",http.StatusBadRequest)
+		return
+	}
+	
+	applicationID := parts[2]
+
+	var existingResume sql.NullString
+
+	err := db.QueryRow(`
+    SELECT resume_url
+    FROM applications
+    WHERE id = $1 AND candidate_id = $2
+`, applicationID, candidateID).Scan(&existingResume)
+
+
+	if err != nil {
+		http.Error(w,"APLLICATION NOT FOUND",http.StatusNotFound)
+		return
+	}
+
+	if existingResume.Valid{
+		http.Error(w,"RESUME ALREADY UPLOADED FOR THIS APPLICATION",http.StatusConflict)
+		return
+	}
+
+	//BUILDING S3 KEY
+
+	s3Key := fmt.Sprintf("resumes/%s/resume.pdf",applicationID) //location name inside S3
+
+	presigner := s3.NewPresignClient(s3Client)
+
+	req, err := presigner.PresignPutObject( //generating a temporary permission
+		context.TODO(),
+		&s3.PutObjectInput{
+			Bucket: &bucketName,
+			Key: &s3Key,
+			ContentType: aws.String("application/pdf"),
+		},
+		s3.WithPresignExpires(10*time.Minute),
+	)
+
+	if err!=nil{
+		http.Error(w,"FAILED TO GENERATE UPLOAD URL",http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"upload_url":req.URL,
+		"s3_key":s3Key,
+	})
+}
+
+
+
+func confirmResumeUploadHandler(w http.ResponseWriter,r *http.Request){
+	role := r.Context().Value("role").(string)
+
+	if role != "candidate" {
+		http.Error(w, "FORBIDDEN", http.StatusForbidden)
+		return
+	}
+		
+	candidateID := r.Context().Value("user_id").(string)
+
+	parts := strings.Split(r.URL.Path,"/")
+	if len(parts)<5{
+		http.Error(w,"INVALID URL",http.StatusBadRequest)
+		return
+	}
+
+	applicationID := parts[2]
+
+	s3Key := fmt.Sprintf("resumes/%s/resume.pdf",applicationID)
+
+	res, err := db.Exec(`
+		UPDATE applications
+		SET resume_url = $1,
+		    status = 'resume_uploaded'
+		WHERE id = $2 AND candidate_id = $3
+	`, s3Key, applicationID, candidateID)
+
+	if err != nil{
+		http.Error(w,"FAILED TO UPDATE APPLICATION",http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := res.RowsAffected()
+
+	if rows == 0{
+		http.Error(w,"APPLICATION NOT FOUND",http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "RESUME UPLOAD CONFIRMED",
+	})
+
+
+}
+
+
+
+func updateApplicationStatusHandler(w http.ResponseWriter, r *http.Request){
+	if r.Method != http.MethodPatch{
+		http.Error(w,"METHOD NOT ALLOWED",http.StatusMethodNotAllowed)
+		return
+	}
+
+	role := r.Context().Value("role").(string)
+
+	if role != "recruiter"{
+		http.Error(w,"FORBIDDEN",http.StatusForbidden)
+		return
+	}
+
+	recruiterID := r.Context().Value("user_id").(string)
+
+	parts := strings.Split(r.URL.Path,"/")
+
+	if len(parts) <4{
+		http.Error(w,"INVALID URL",http.StatusBadRequest)
+		return
+	}
+	applicationID := parts[2]
+
+	var body struct{
+		Status string `json:"status"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil{
+		http.Error(w,"INVALID BODY",http.StatusBadRequest)
+		return
+	}
+
+	if !allowedStatuses[body.Status]{
+		http.Error(w,"INVALID STATUS",http.StatusBadRequest)
+		return
+	}
+
+	res, err := db.Exec(`
+		UPDATE applications a
+		SET status = $1
+		FROM jobs j
+		WHERE a.id = $2
+		  AND a.job_id = j.id
+		  AND j.recruiter_id = $3
+		 `,body.Status,applicationID,recruiterID)
+
+	if err != nil{
+		log.Println("STATUS UPDATE ERROR:",err)
+		http.Error(w,"FAIELD TO UPDATE STATUS",http.StatusInternalServerError)
+		return
+	}
+
+	rows, _ := res.RowsAffected()
+
+	if rows == 0{
+		http.Error(w,"APPLICATION NOT FOUND OR NOT AUTHORIZED",http.StatusForbidden)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "STATUS UPDATED",
+		"status": body.Status,
+	})
+}
