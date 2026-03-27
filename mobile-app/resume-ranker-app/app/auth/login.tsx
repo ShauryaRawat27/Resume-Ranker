@@ -5,23 +5,83 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 
 import { Colors, Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE_URL } from '@/lib/api';
+
 
 export default function LoginScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
   const palette = Colors[scheme];
-  const [selectedRole, setSelectedRole] = useState<'user' | 'recruiter' | null>(null);
+  const [selectedRole, setSelectedRole] = useState<'candidate' | 'recruiter' | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
-  const handleLogin = () => {
-    if (selectedRole === 'user') {
-      router.replace('/(user-tabs)');
+
+  // const handleLogin = () => {
+  //   if (selectedRole === 'candidate') {
+  //     router.replace('/(user-tabs)');
+  //     return;
+  //   }
+
+  //   if (selectedRole === 'recruiter') {
+  //     router.replace('/(recruiter-tabs)');
+  //   }
+  // };
+
+  const handleLogin = async () => {
+    if(!email.trim()){
+      console.log("EMAIL IS REQUIRED!!!");
+      return;
+    }
+    if(!password.trim()){
+      console.log("PASSWORD IS REQUIRED");
       return;
     }
 
-    if (selectedRole === 'recruiter') {
-      router.replace('/(recruiter-tabs)');
+    if(!selectedRole){
+      console.log("PLEASE SELECT A ROLE!!!");
+      return;
     }
-  };
+
+    const response = await fetch(`${API_BASE_URL}/auth/login`,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+      },
+      body: JSON.stringify({
+        email: email.trim(),
+        password,
+      }),
+    });
+
+const raw = await response.text();
+console.log('Login status:', response.status);
+console.log('Login response:', raw);
+
+if (!response.ok) {
+  console.log('Login failed');
+  return;
+}
+
+const data = JSON.parse(raw);
+
+await AsyncStorage.setItem('token', data.token);
+await AsyncStorage.setItem('role', selectedRole);
+
+const savedToken = await AsyncStorage.getItem('token');
+console.log('Saved token:', savedToken);
+
+if (selectedRole === 'candidate'){
+  router.replace('/(user-tabs)');
+  return; 
+}
+
+if (selectedRole === 'recruiter'){
+  router.replace('/(recruiter-tabs)');
+  return;
+}
+};
 
   return (
     <ScrollView
@@ -39,6 +99,10 @@ export default function LoginScreen() {
         <Text style={[styles.sectionTitle, { color: palette.text }]}>Welcome back</Text>
         <TextInput
           placeholder="Email address"
+          value = {email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          keyboardType="email-address"
           placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
           style={[
             styles.input,
@@ -51,6 +115,8 @@ export default function LoginScreen() {
         />
         <TextInput
           placeholder="Password"
+          value={password}
+          onChangeText={setPassword}
           placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
           secureTextEntry
           style={[
@@ -66,12 +132,12 @@ export default function LoginScreen() {
         <Text style={[styles.roleLabel, { color: palette.text }]}>Continue as</Text>
 
         <Pressable
-          onPress={() => setSelectedRole('user')}
+          onPress={() => setSelectedRole('candidate')}
           style={[
             styles.roleCard,
             {
               backgroundColor: isDark ? '#2d221b' : '#fff6ef',
-              borderColor: selectedRole === 'user' ? '#ff7a29' : isDark ? '#3a2b22' : '#f3dfd1',
+              borderColor: selectedRole === 'candidate' ? '#ff7a29' : isDark ? '#3a2b22' : '#f3dfd1',
             },
           ]}>
             <View style={styles.roleHeader}>
@@ -79,9 +145,9 @@ export default function LoginScreen() {
                 <MaterialIcons name="person" size={20} color="#2f9e44" />
               </View>
               <MaterialIcons
-                name={selectedRole === 'user' ? 'radio-button-checked' : 'radio-button-unchecked'}
+                name={selectedRole === 'candidate' ? 'radio-button-checked' : 'radio-button-unchecked'}
                 size={22}
-                color={selectedRole === 'user' ? '#ff7a29' : isDark ? '#cfb8ab' : '#8e6e5b'}
+                color={selectedRole === 'candidate' ? '#ff7a29' : isDark ? '#cfb8ab' : '#8e6e5b'}
               />
             </View>
             <Text style={[styles.roleTitle, { color: palette.text }]}>Job seeker</Text>

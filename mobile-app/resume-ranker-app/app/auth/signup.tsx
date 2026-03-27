@@ -5,6 +5,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 
 import { Colors, Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { API_BASE_URL } from '@/lib/api';
 
 const benefits = [
   'Resume scoring against every job description',
@@ -16,18 +17,65 @@ export default function SignupScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
   const palette = Colors[scheme];
-  const [selectedRole, setSelectedRole] = useState<'user' | 'recruiter' | null>(null);
+  const [selectedRole, setSelectedRole] = useState<'candidate' | 'recruiter' | null>(null);
+  const [fullName, setFullName] = useState('');
+  const [email , setEmail] = useState('');
+  const [password , setPassword] = useState('');
 
-  const handleSignup = () => {
-    if (selectedRole === 'user') {
-      router.replace('/(user-tabs)');
+
+  // const handleSignup = () => {
+  //   if (selectedRole === 'candidate') {
+  //     router.replace('/(user-tabs)');
+  //     return;
+  //   }
+
+  //   if (selectedRole === 'recruiter') {
+  //     router.replace('/(recruiter-tabs)');
+  //   }
+  // };
+
+  const handleSignup = async () => {
+    if(!email.trim()){
+      console.log('Email is Required')
+      return
+    }
+
+    if(!password.trim()){
+      console.log('Password is required')
+      return
+    }
+
+    if (!selectedRole) {
+    console.log('Please select a Role');
+    return;
+  }
+
+  try{
+    const response = await fetch(`${API_BASE_URL}/auth/signup`, {
+      method:'POST',
+      headers: {
+        'Content-Type':'application/json',
+      },
+      body: JSON.stringify({
+        email: email.trim(),
+        password,
+        role: selectedRole,
+      }),
+    });
+
+    const raw = await response.text();
+    console.log('Signup response: ',raw);
+
+    if(!response.ok){
+       console.log('Signup failed');
       return;
     }
 
-    if (selectedRole === 'recruiter') {
-      router.replace('/(recruiter-tabs)');
-    }
-  };
+    router.replace('/auth/login');
+  } catch(error){
+    console.log('Signup Error:',error);
+  }
+  } ;
 
   return (
     <ScrollView
@@ -44,6 +92,8 @@ export default function SignupScreen() {
       <View style={[styles.card, { backgroundColor: isDark ? '#261d17' : '#fffdf9' }]}>
         <TextInput
           placeholder="Full name"
+          value={fullName}
+          onChangeText={setFullName}
           placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
           style={[
             styles.input,
@@ -56,6 +106,10 @@ export default function SignupScreen() {
         />
         <TextInput
           placeholder="Work email"
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          keyboardType="email-address"
           placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
           style={[
             styles.input,
@@ -68,6 +122,8 @@ export default function SignupScreen() {
         />
         <TextInput
           placeholder="Create password"
+          value={password}
+          onChangeText={setPassword}
           placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
           secureTextEntry
           style={[
@@ -92,20 +148,20 @@ export default function SignupScreen() {
         <Text style={[styles.roleLabel, { color: palette.text }]}>Choose account type</Text>
 
         <Pressable
-          onPress={() => setSelectedRole('user')}
+          onPress={() => setSelectedRole('candidate')}
           style={[
             styles.roleCard,
             {
               backgroundColor: isDark ? '#2d221b' : '#fff6ef',
-              borderColor: selectedRole === 'user' ? '#ff7a29' : isDark ? '#3a2b22' : '#f3dfd1',
+              borderColor: selectedRole === 'candidate' ? '#ff7a29' : isDark ? '#3a2b22' : '#f3dfd1',
             },
           ]}>
           <View style={styles.roleHeader}>
             <Text style={[styles.roleTitle, { color: palette.text }]}>Job seeker</Text>
             <MaterialIcons
-              name={selectedRole === 'user' ? 'radio-button-checked' : 'radio-button-unchecked'}
+              name={selectedRole === 'candidate' ? 'radio-button-checked' : 'radio-button-unchecked'}
               size={22}
-              color={selectedRole === 'user' ? '#ff7a29' : isDark ? '#cfb8ab' : '#8e6e5b'}
+              color={selectedRole === 'candidate' ? '#ff7a29' : isDark ? '#cfb8ab' : '#8e6e5b'}
             />
           </View>
           <Text style={[styles.roleCopy, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
