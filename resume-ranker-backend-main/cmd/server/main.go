@@ -148,6 +148,13 @@ mux.HandleFunc("/applications/", middleware.Auth(jwtSecret)(func(w http.Response
 			return
 		}
 
+	
+		if r.Method == http.MethodPost && 
+			strings.HasSuffix(r.URL.Path,"/resume-text"){
+				appHandler.SaveResumeText(w,r)
+				return
+			}
+
 	http.Error(w, "METHOD NOT ALLOWED", http.StatusMethodNotAllowed)
 }))
 
