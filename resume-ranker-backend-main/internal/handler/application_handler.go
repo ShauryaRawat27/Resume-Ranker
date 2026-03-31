@@ -143,3 +143,43 @@ func(h *ApplicationHandler) DownaloadResume(w http.ResponseWriter,r *http.Reques
 		"download_url": url,
 	})
 }
+
+func (h *ApplicationHandler) SaveResumeText(w http.ResponseWriter, r *http.Request){
+	candidateID := r.Context().Value("user_id").(string)
+	role := r.Context().Value("role").(string)
+
+	if role != "candidate" {
+		http.Error(w,"FORBIDDEN",http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.Split(r.URL.Path,"/");
+	
+	if len(parts) < 4{
+		http.Error(w,"INVALID URL",http.StatusBadRequest)
+		return
+	}
+
+	applicationID := parts[2];
+
+	var input struct {
+		ResumeText string `json:"resume_text"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil{
+		http.Error(w,"INVALID INPUT",http.StatusBadRequest)
+		return
+	}
+
+	err := h.Service.SaveResumeText(applicationID, candidateID, role, input.ResumeText);
+	if err != nil {
+		http.Error(w,err.Error(), http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "RESUME TEXT SAVED",
+	})
+
+}

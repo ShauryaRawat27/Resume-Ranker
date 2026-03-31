@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"resume-ranker/internal/repository"
@@ -125,4 +126,16 @@ func (s *ApplicationService) GenerateResumeDownloadURL(ctx context.Context, appl
 	}
 
 	return req.URL, nil
+}
+
+func (s *ApplicationService) SaveResumeText(applicationID, candidateID, role, resumeText string) error{
+	if role != "candidate"{
+		return errors.New("ONLY CANDIDATES CAN SAVE RESUME TEXT!!!");
+	}
+
+	if strings.TrimSpace(resumeText) == ""{
+		return errors.New("RESUME TEXT IS REQUIRED!!!")
+	}
+
+	return s.Repo.SaveResumeText(applicationID, candidateID, resumeText)
 }

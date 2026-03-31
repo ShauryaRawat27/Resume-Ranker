@@ -13,6 +13,7 @@ type Application struct{
 	AppliedAt	time.Time
 	ResumeUrl	string
 	Status      string
+	ResumeText	string
 }
 
 
@@ -37,7 +38,7 @@ func (r *ApplicationRepository) Create(appID,jobID,candidateID,status string) er
 
 func (r *ApplicationRepository) GetByCandidate(candidateID string) ([]Application, error){
 	rows, err := r.DB.Query(`
-		SELECT id, job_id, candidate_id, applied_at, resume_url, status
+		SELECT id, job_id, candidate_id, applied_at, COALESCE(resume_url, ''), status, COALESCE(resume_text, '')
 		FROM applications
 		WHERE candidate_id = $1
 	`, candidateID)
@@ -59,6 +60,7 @@ func (r *ApplicationRepository) GetByCandidate(candidateID string) ([]Applicatio
 			&application.AppliedAt,
 			&application.ResumeUrl,
 			&application.Status,
+			&application.ResumeText,
 		)
 
 		if err != nil {
@@ -71,7 +73,7 @@ func (r *ApplicationRepository) GetByCandidate(candidateID string) ([]Applicatio
 
 func (r *ApplicationRepository) GetByRecruiter(recruiterID string) ([]Application, error){
 	rows, err := r.DB.Query(`
-		SELECT a.id, a.job_id, a.candidate_id, a.applied_at, a.resume_url, a.status
+		SELECT a.id, a.job_id, a.candidate_id, a.applied_at, COALESCE(a.resume_url, ''), a.status, COALESCE(a.resume_text, '')
 		FROM applications a
 		JOIN jobs j ON a.job_id = j.id
 		WHERE j.recruiter_id = $1
@@ -95,6 +97,7 @@ func (r *ApplicationRepository) GetByRecruiter(recruiterID string) ([]Applicatio
 			&application.AppliedAt,
 			&application.ResumeUrl,
 			&application.Status,
+			&application.ResumeText,
 		)
 
 		if err!= nil{
@@ -153,4 +156,23 @@ func (r *ApplicationRepository) GetResumeForRecruiter(applicationID, recruiterID
 	`, applicationID, recruiterID).Scan(&s3Key)
 
 	return s3Key, err
+}
+
+func (r *ApplicationRepository) SaveResumeText(applicationID, candidateID, resumeText string) error{
+	res, err := r.DB.Exec(`
+		UPDATE applications
+		SET resume_text = $1
+		WHERE id = $2 AND candidate_id = $3
+	`, resumeText, applicationID, candidateID)
+
+	if err != nil {
+		return err
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return errors.New("application not found")
+	}
+
+	return nil
 }

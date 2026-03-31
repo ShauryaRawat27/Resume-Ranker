@@ -9,4 +9,5 @@ type Application struct {
 	ResumeURL   *string   `json:"resume_url,omitempty"`
 	Status      string    `json:"status"`
 	AppliedAt   time.Time `json:"applied_at"`
+	ResumeText *string `json:"resume_text,omitempty"`
 }
