@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { API_BASE_URL } from '@/lib/api';
 import { Colors } from '@/constants/theme';
@@ -13,6 +13,7 @@ type BackendApplication = {
   AppliedAt: string;
   ResumeUrl?: string;
   Status: string;
+  ResumeText?: string;
 };
 
 type BackendJob = {
@@ -33,6 +34,9 @@ export default function ApplicationsScreen() {
   const [jobTitleById, setJobTitleById] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [resumeTextByApplicationId, setResumeTextByApplicationId] = useState<Record<string, string>>({});
+  const [savingApplicationId, setSavingApplicationId] = useState<string | null>(null);
+  const [savedMessageByApplicationId, setSavedMessageByApplicationId] = useState<Record<string, string>>({});
 
   const loadApplications = async () => {
     try {
@@ -72,8 +76,13 @@ export default function ApplicationsScreen() {
         return;
       }
 
-      const applicationData = JSON.parse(applicationsRaw) as BackendApplication[];
+      const applicationData = (JSON.parse(applicationsRaw) ?? []) as BackendApplication[];
       setApplications(applicationData);
+      setResumeTextByApplicationId(
+        Object.fromEntries(
+          applicationData.map((application) => [application.ID, application.ResumeText ?? ''])
+        )
+      );
 
       if (jobsResponse.ok) {
         const jobsData = JSON.parse(jobsRaw) as BackendJob[];
@@ -86,6 +95,61 @@ export default function ApplicationsScreen() {
       setError('Something went wrong');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveResumeText = async (applicationId: string) => {
+    try {
+      setSavingApplicationId(applicationId);
+      const token = await AsyncStorage.getItem('token');
+
+      if (!token) {
+        setSavedMessageByApplicationId((current) => ({
+          ...current,
+          [applicationId]: 'No token found',
+        }));
+        return;
+      }
+
+      const response = await fetch(
+        `${API_BASE_URL}/applications/${applicationId}/resume-text`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            resume_text: resumeTextByApplicationId[applicationId] ?? '',
+          }),
+        }
+      );
+
+      const raw = await response.text();
+
+      console.log('Save resume text status:', response.status);
+      console.log('Save resume text response:', raw);
+
+      if (!response.ok) {
+        setSavedMessageByApplicationId((current) => ({
+          ...current,
+          [applicationId]: 'Failed to save resume text',
+        }));
+        return;
+      }
+
+      setSavedMessageByApplicationId((current) => ({
+        ...current,
+        [applicationId]: 'Resume text saved to backend',
+      }));
+    } catch (saveError) {
+      console.log('Resume text save error:', saveError);
+      setSavedMessageByApplicationId((current) => ({
+        ...current,
+        [applicationId]: 'Failed to save resume text',
+      }));
+    } finally {
+      setSavingApplicationId(null);
     }
   };
 
@@ -178,6 +242,48 @@ export default function ApplicationsScreen() {
               <Text style={[styles.metaValue, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
                 {application.ID}
               </Text>
+
+              <Text style={[styles.metaLabel, { color: isDark ? '#e8d5c8' : '#9a4d16' }]}>
+                Resume text for NLP
+              </Text>
+              <TextInput
+                value={resumeTextByApplicationId[application.ID] ?? ''}
+                onChangeText={(text) => {
+                  setResumeTextByApplicationId((current) => ({
+                    ...current,
+                    [application.ID]: text,
+                  }));
+                  setSavedMessageByApplicationId((current) => ({
+                    ...current,
+                    [application.ID]: '',
+                  }));
+                }}
+                placeholder="Paste resume text here for now. We can use this later for NLP scoring."
+                placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
+                multiline
+                textAlignVertical="top"
+                style={[
+                  styles.resumeTextArea,
+                  {
+                    backgroundColor: isDark ? '#332720' : '#fff5ee',
+                    color: palette.text,
+                    borderColor: isDark ? '#4a392f' : '#f1ddd0',
+                  },
+                ]}
+              />
+              <Pressable
+                onPress={() => saveResumeText(application.ID)}
+                disabled={savingApplicationId === application.ID}
+                style={[styles.saveButton, savingApplicationId === application.ID && styles.pendingButton]}>
+                <Text style={styles.saveButtonText}>
+                  {savingApplicationId === application.ID ? 'Saving...' : 'Save Resume Text'}
+                </Text>
+              </Pressable>
+              {savedMessageByApplicationId[application.ID] ? (
+                <Text style={[styles.savedNote, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
+                  {savedMessageByApplicationId[application.ID]}
+                </Text>
+              ) : null}
             </View>
           );
         })
@@ -267,5 +373,32 @@ const styles = StyleSheet.create({
   metaValue: {
     fontSize: 14,
     lineHeight: 22,
+  },
+  resumeTextArea: {
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    minHeight: 140,
+    fontSize: 15,
+  },
+  saveButton: {
+    marginTop: 4,
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: '#22577a',
+  },
+  pendingButton: {
+    opacity: 0.75,
+  },
+  saveButtonText: {
+    color: '#f4fbff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  savedNote: {
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

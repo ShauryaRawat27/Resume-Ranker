@@ -50,6 +50,13 @@ export default function RecruiterTabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="leaderboard"
+        options={{
+          title: 'Ranking',
+          tabBarIcon: ({ color }) => <MaterialIcons size={26} name="leaderboard" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="company"
         options={{
           title: 'Company',

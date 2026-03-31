@@ -67,7 +67,7 @@ export default function MatchesScreen() {
       return;
     }
 
-    const data = JSON.parse(raw) as BackendApplication[];
+    const data = (JSON.parse(raw) ?? []) as BackendApplication[];
     setAppliedJobIds(data.map((application) => application.JobID));
     setApplicationIdByJobId(
       Object.fromEntries(data.map((application) => [application.JobID, application.ID]))

@@ -1,4 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Link, router } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -70,6 +71,9 @@ export default function SignupScreen() {
        console.log('Signup failed');
       return;
     }
+
+    await AsyncStorage.setItem('profile_name', fullName.trim());
+    await AsyncStorage.setItem('profile_email', email.trim());
 
     router.replace('/auth/login');
   } catch(error){

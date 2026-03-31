@@ -8,6 +8,13 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '@/lib/api';
 
+const formatNameFromEmail = (email: string) =>
+  email
+    .split('@')[0]
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 
 export default function LoginScreen() {
   const scheme = useColorScheme() ?? 'light';
@@ -68,6 +75,12 @@ const data = JSON.parse(raw);
 
 await AsyncStorage.setItem('token', data.token);
 await AsyncStorage.setItem('role', selectedRole);
+await AsyncStorage.setItem('profile_email', email.trim());
+
+const storedName = await AsyncStorage.getItem('profile_name');
+if (!storedName) {
+  await AsyncStorage.setItem('profile_name', formatNameFromEmail(email.trim()));
+}
 
 const savedToken = await AsyncStorage.getItem('token');
 console.log('Saved token:', savedToken);

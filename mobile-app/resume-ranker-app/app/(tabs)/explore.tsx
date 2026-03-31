@@ -1,5 +1,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Fonts } from '@/constants/theme';
@@ -16,6 +18,30 @@ export default function ProfileScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
   const palette = Colors[scheme];
+  const [displayName, setDisplayName] = useState('Candidate');
+  const [displayRole, setDisplayRole] = useState('Candidate');
+  const [avatarText, setAvatarText] = useState('CA');
+
+  useEffect(() => {
+    const loadProfile = async () => {
+      const storedName = await AsyncStorage.getItem('profile_name');
+      const storedRole = await AsyncStorage.getItem('role');
+      const nextName = storedName?.trim() || 'Candidate';
+      const nextRole = storedRole === 'recruiter' ? 'Recruiter' : 'Candidate';
+      const initials = nextName
+        .split(' ')
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part.charAt(0).toUpperCase())
+        .join('');
+
+      setDisplayName(nextName);
+      setDisplayRole(nextRole);
+      setAvatarText(initials || 'CA');
+    };
+
+    loadProfile();
+  }, []);
 
   return (
     <ScrollView
@@ -23,11 +49,11 @@ export default function ProfileScreen() {
       contentContainerStyle={styles.content}>
       <View style={[styles.profileHero, { backgroundColor: isDark ? '#31231b' : '#fff1e5' }]}>
         <View style={[styles.avatar, { backgroundColor: isDark ? '#493226' : '#ffd9bf' }]}>
-          <Text style={styles.avatarText}>AS</Text>
+          <Text style={styles.avatarText}>{avatarText}</Text>
         </View>
         <View style={styles.profileCopy}>
-          <Text style={[styles.name, { color: palette.text }]}>Abhinav Singh</Text>
-          <Text style={[styles.role, { color: isDark ? '#e6d2c5' : '#805e49' }]}>Frontend Developer</Text>
+          <Text style={[styles.name, { color: palette.text }]}>{displayName}</Text>
+          <Text style={[styles.role, { color: isDark ? '#e6d2c5' : '#805e49' }]}>{displayRole}</Text>
           <Text style={[styles.summary, { color: isDark ? '#d5c1b5' : '#735b4c' }]}>
             Profile settings for your ranking preferences, target roles, and the strengths you want to surface.
           </Text>

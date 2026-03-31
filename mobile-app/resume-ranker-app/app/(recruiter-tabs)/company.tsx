@@ -1,5 +1,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Fonts } from '@/constants/theme';
@@ -15,13 +17,23 @@ export default function RecruiterCompanyScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
   const palette = Colors[scheme];
+  const [displayName, setDisplayName] = useState('Recruiter');
+
+  useEffect(() => {
+    const loadProfile = async () => {
+      const storedName = await AsyncStorage.getItem('profile_name');
+      setDisplayName(storedName?.trim() || 'Recruiter');
+    };
+
+    loadProfile();
+  }, []);
 
   return (
     <ScrollView
       style={[styles.screen, { backgroundColor: palette.background }]}
       contentContainerStyle={styles.content}>
       <View style={[styles.hero, { backgroundColor: isDark ? '#31231b' : '#fff1e5' }]}>
-        <Text style={[styles.name, { color: palette.text }]}>Orbit Labs Hiring</Text>
+        <Text style={[styles.name, { color: palette.text }]}>{displayName}</Text>
         <Text style={[styles.helper, { color: isDark ? '#dcc7ba' : '#765c4d' }]}>
           Configure how resumes are ranked for your team and how applicants move through the funnel.
         </Text>
