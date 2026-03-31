@@ -40,8 +40,22 @@ export default function UserTabsLayout() {
       <Tabs.Screen
         name="jobs"
         options={{
-          title: 'Matches',
+          title: 'Jobs',
           tabBarIcon: ({ color }) => <MaterialIcons size={26} name="analytics" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="applications"
+        options={{
+          title: 'Applied',
+          tabBarIcon: ({ color }) => <MaterialIcons size={26} name="assignment-turned-in" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="analysis"
+        options={{
+          title: 'Analysis',
+          tabBarIcon: ({ color }) => <MaterialIcons size={26} name="person" color={color} />,
         }}
       />
       <Tabs.Screen

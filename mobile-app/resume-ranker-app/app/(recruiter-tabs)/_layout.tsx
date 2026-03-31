@@ -43,6 +43,13 @@ export default function RecruiterTabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="create-job"
+        options={{
+          title: 'Create',
+          tabBarIcon: ({ color }) => <MaterialIcons size={26} name="post-add" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="company"
         options={{
           title: 'Company',
