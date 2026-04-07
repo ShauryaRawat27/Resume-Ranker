@@ -1,14 +1,32 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-const weeklyWins = [
-  { label: 'Resume score', value: '86', tone: '#2f9e44' },
-  { label: 'Matched skills', value: '14', tone: '#ff7a29' },
-  { label: 'Missing skills', value: '3', tone: '#d9480f' },
-];
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useState } from 'react';
+import { API_BASE_URL } from '@/lib/api';
+
+// const weeklyWins = [
+//   { label: 'Resume score', value: '86', tone: '#2f9e44' },
+//   { label: 'Matched skills', value: '14', tone: '#ff7a29' },
+//   { label: 'Missing skills', value: '3', tone: '#d9480f' },
+// ];
+
+type BackendApplication = {
+  ID: string;
+  JobID: string;
+  CandidateID: string;
+  AppliedAt: string;
+  ResumeUrl?: string;
+  Status: string;
+  ResumeText?: string;
+};
+
+
 
 const checklist = [
   'Add one measurable impact bullet to your latest role.',
@@ -20,6 +38,53 @@ export default function DashboardScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
   const palette = Colors[scheme];
+
+  const [applications, setApplications] = useState<BackendApplication[]>([]);
+
+
+  const loadApplications = useCallback(async () => {
+    const token = await AsyncStorage.getItem('token');
+
+    if (!token) {
+      return;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/applications`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    const data = (await response.json()) as BackendApplication[];
+    setApplications(data ?? []);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadApplications();
+    }, [loadApplications])
+  );
+
+  const dashboardStats= [
+    {label: 'Applied jobs', value: String(applications.length), tone:'#2f9e44'},
+    {
+      label: 'Resume uploaded',
+      value: String(applications.filter((application) => application.Status === 'resume_uploaded').length),
+      tone: '#ff7a29',
+    },
+
+    {
+      label: 'Pending resume',
+      value: String(applications.filter((application) => application.Status === 'resume_pending').length),
+      tone: '#d9480f',
+
+    },
+  ];
 
   return (
     <ScrollView
@@ -34,24 +99,26 @@ export default function DashboardScreen() {
         </Text>
 
         <View style={styles.heroActions}>
-          <View style={[styles.primaryAction, { backgroundColor: '#ff7a29' }]}>
+          <Pressable
+            onPress={() => router.push('/(user-tabs)/analysis')}
+            style={[styles.primaryAction, { backgroundColor: '#ff7a29' }]}>
             <MaterialIcons name="upload-file" size={18} color="#fffaf5" />
-            <Text style={styles.primaryActionText}>Upload Resume</Text>
-          </View>
-          <View style={[styles.secondaryAction, { borderColor: isDark ? '#7c5a47' : '#e9c8b1' }]}>
+            <Text style={styles.primaryActionText}>Analyze Resume</Text>
+          </Pressable>
+          {/* <View style={[styles.secondaryAction, { borderColor: isDark ? '#7c5a47' : '#e9c8b1' }]}>
             <MaterialIcons name="work-outline" size={18} color={palette.text} />
             <Text style={[styles.secondaryActionText, { color: palette.text }]}>Paste Job Description</Text>
-          </View>
+          </View> */}
         </View>
       </View>
 
       <View style={styles.sectionHeader}>
         <Text style={[styles.sectionTitle, { color: palette.text }]}>This week</Text>
-        <Text style={[styles.sectionMeta, { color: isDark ? '#c7b6aa' : '#8e6e5b' }]}>Updated 2 hours ago</Text>
+        <Text style={[styles.sectionMeta, { color: isDark ? '#c7b6aa' : '#8e6e5b' }]}>Live from backend</Text>
       </View>
 
       <View style={styles.statsRow}>
-        {weeklyWins.map((item) => (
+        {dashboardStats.map((item) => (
           <View
             key={item.label}
             style={[

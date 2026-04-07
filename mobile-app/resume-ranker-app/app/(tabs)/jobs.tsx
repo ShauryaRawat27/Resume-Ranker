@@ -187,6 +187,7 @@ export default function MatchesScreen() {
       ...current,
       [jobId]: 'resume_pending',
     }));
+    await loadApplications(token, role);
     console.log('Applied successfully');
   } catch (error) {
     console.log('Apply error:', error);

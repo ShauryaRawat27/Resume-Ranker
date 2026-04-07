@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { API_BASE_URL } from '@/lib/api';
@@ -38,7 +39,7 @@ export default function ApplicationsScreen() {
   const [savingApplicationId, setSavingApplicationId] = useState<string | null>(null);
   const [savedMessageByApplicationId, setSavedMessageByApplicationId] = useState<Record<string, string>>({});
 
-  const loadApplications = async () => {
+  const loadApplications = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -96,7 +97,7 @@ export default function ApplicationsScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const saveResumeText = async (applicationId: string) => {
     try {
@@ -153,9 +154,11 @@ export default function ApplicationsScreen() {
     }
   };
 
-  useEffect(() => {
-    loadApplications();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      void loadApplications();
+    }, [loadApplications])
+  );
 
   if (loading) {
     return (
