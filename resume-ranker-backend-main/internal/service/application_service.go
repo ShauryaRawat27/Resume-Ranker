@@ -53,14 +53,10 @@ func (s *ApplicationService) GetApplications(userID, role string) ([]repository.
 }
 
 func (s *ApplicationService) PresignResumeUpload(ctx context.Context,applicationID, candidateID string)(string, string , error){
-	resume, err := s.Repo.GetResumeByCandidate(applicationID, candidateID)
+	_, err := s.Repo.GetResumeByCandidate(applicationID, candidateID)
 
 	if err != nil{
 		return "", "", errors.New("APPLICATION NOT FOUND")
-	}
-
-	if resume.Valid && resume.String != ""  {
-		return "", "", errors.New("RESUME ALREADY UPLOADED")
 	}
 
 	s3Key := fmt.Sprintf("resumes/%s/resume.pdf", applicationID)

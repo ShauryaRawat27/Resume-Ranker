@@ -1,13 +1,15 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE_URL } from '@/lib/api';
+import { API_BASE_URL, NLP_BASE_URL } from '@/lib/api';
+import { MASTER_SKILL_SET } from '@/lib/skills';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import * as DocumentPicker from 'expo-document-picker';
 
-
+const JOB_SCORE_STORAGE_KEY = 'job_score_by_job_id';
 
 type BackendJob = {
   ID: string;
@@ -28,6 +30,11 @@ type BackendApplication = {
   Status: string;
 };
 
+type AnalysisResult = {
+  final_score: number;
+  extracted_resume_text?: string;
+};
+
 export default function MatchesScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
@@ -41,9 +48,10 @@ export default function MatchesScreen() {
   const [submittingJobId, setSubmittingJobId] = useState<string | null>(null);
   const [applicationIdByJobId, setApplicationIdByJobId] = useState<Record<string, string>>({});
   const [uploadingJobId, setUploadingJobId] = useState<string | null>(null);
+  const [scoringJobId, setScoringJobId] = useState<string | null>(null);
 
 
-  const loadApplications = async (token: string, savedRole: string | null) => {
+  const loadApplications = useCallback(async (token: string, savedRole: string | null) => {
     if (savedRole !== 'candidate') {
       setAppliedJobIds([]);
       setApplicationIdByJobId({});
@@ -75,9 +83,9 @@ export default function MatchesScreen() {
     setApplicationStatusByJobId(
       Object.fromEntries(data.map((application) => [application.JobID, application.Status]))
     );
-  };
+  }, []);
 
-  const loadJobs = async () => {
+  const loadJobs = useCallback(async () => {
     try{
       setLoading(true);
       setError('');
@@ -108,7 +116,7 @@ export default function MatchesScreen() {
       return;
     }
 
-    const data = JSON.parse(raw);
+    const data = (JSON.parse(raw) ?? []) as BackendJob[];
     setJobs(data);
     await loadApplications(token, savedRole);
   } catch (err) {
@@ -117,11 +125,93 @@ export default function MatchesScreen() {
   } finally {
     setLoading(false);
   }
+  }, [loadApplications]);
+
+const saveJobScore = async (jobId: string, score: number) => {
+  const storedScores = await AsyncStorage.getItem(JOB_SCORE_STORAGE_KEY);
+  const current = storedScores ? JSON.parse(storedScores) : {};
+  const next = {
+    ...current,
+    [jobId]: score,
   };
 
-  useEffect(() => {
-    loadJobs();
-  },[]);
+  await AsyncStorage.setItem(JOB_SCORE_STORAGE_KEY, JSON.stringify(next));
+};
+
+const saveExtractedResumeText = async (applicationId: string, resumeText?: string) => {
+  if (!resumeText?.trim()) {
+    return;
+  }
+
+  const token = await AsyncStorage.getItem('token');
+
+  if (!token) {
+    return;
+  }
+
+  const response = await fetch(`${API_BASE_URL}/applications/${applicationId}/resume-text`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      resume_text: resumeText,
+    }),
+  });
+
+  const raw = await response.text();
+
+  console.log('Save extracted resume text status:', response.status);
+  console.log('Save extracted resume text response:', raw);
+};
+
+const analyzeUploadedResume = async (
+  job: BackendJob,
+  applicationId: string,
+  file: DocumentPicker.DocumentPickerAsset
+) => {
+  try {
+    setScoringJobId(job.ID);
+
+    const formData = new FormData();
+    formData.append('resume_pdf', {
+      uri: file.uri,
+      name: file.name || 'resume.pdf',
+      type: file.mimeType || 'application/pdf',
+    } as unknown as Blob);
+    formData.append('job_description', job.Description);
+    formData.append('skills', JSON.stringify(MASTER_SKILL_SET));
+
+    const response = await fetch(`${NLP_BASE_URL}/rank-pdf`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const raw = await response.text();
+
+    console.log('Job upload score status:', response.status);
+    console.log('Job upload score response:', raw);
+
+    if (!response.ok) {
+      return;
+    }
+
+    const data = JSON.parse(raw) as AnalysisResult;
+    await saveJobScore(job.ID, data.final_score);
+    await saveExtractedResumeText(applicationId, data.extracted_resume_text);
+  } catch (scoreError) {
+    console.log('Job upload score error:', scoreError);
+  } finally {
+    setScoringJobId(null);
+  }
+};
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadJobs();
+    }, [loadJobs])
+  );
 
     if (loading) {
     return (
@@ -196,8 +286,9 @@ export default function MatchesScreen() {
   }
 };
 
-const pickResumeAndUpload = async (jobId: string) => {
+const pickResumeAndUpload = async (job: BackendJob) => {
   try {
+    const jobId = job.ID;
     const applicationId = applicationIdByJobId[jobId];
 
     if (!applicationId) {
@@ -307,6 +398,8 @@ const pickResumeAndUpload = async (jobId: string) => {
     }));
 
     console.log('Resume uploaded successfully');
+    setUploadingJobId(null);
+    await analyzeUploadedResume(job, applicationId, file);
 
     await loadJobs();
   } catch (error) {
@@ -316,6 +409,8 @@ const pickResumeAndUpload = async (jobId: string) => {
   }
 };
 
+
+  const visibleJobs = jobs.filter((job) => applicationStatusByJobId[job.ID] !== 'resume_uploaded');
 
 
   return (
@@ -329,11 +424,21 @@ const pickResumeAndUpload = async (jobId: string) => {
         </Text>
       </View>
 
-      {jobs.map((job) => (
+      {visibleJobs.length === 0 ? (
+        <View style={[styles.emptyCard, { backgroundColor: isDark ? '#261d17' : '#fffdf9' }]}>
+          <Text style={[styles.emptyTitle, { color: palette.text }]}>No jobs yet</Text>
+          <Text style={[styles.emptyCopy, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
+            New jobs will show here. Uploaded applications move to the Applied tab.
+          </Text>
+        </View>
+      ) : null}
+
+      {visibleJobs.map((job) => (
         (() => {
           const isApplied = appliedJobIds.includes(job.ID);
           const isSubmitting = submittingJobId === job.ID;
           const isUploading = uploadingJobId === job.ID;
+          const isScoring = scoringJobId === job.ID;
           const showApplyButton = role === 'candidate';
           const applicationStatus = applicationStatusByJobId[job.ID];
           const showUploadButton = applicationStatus === 'resume_pending';
@@ -405,11 +510,11 @@ const pickResumeAndUpload = async (jobId: string) => {
               ) : null}
               {showUploadButton ? (
                 <Pressable
-                  disabled={isUploading}
-                  onPress={() => pickResumeAndUpload(job.ID)}
-                  style={[styles.uploadButton, isUploading && styles.pendingButton]}>
+                  disabled={isUploading || isScoring}
+                  onPress={() => pickResumeAndUpload(job)}
+                  style={[styles.uploadButton, (isUploading || isScoring) && styles.pendingButton]}>
                   <Text style={styles.uploadButtonText}>
-                    {isUploading ? 'Uploading...' : 'Upload Resume'}
+                    {isUploading ? 'Uploading...' : isScoring ? 'Scoring...' : 'Upload Resume'}
                   </Text>
                 </Pressable>
               ) : null}
@@ -442,6 +547,19 @@ const styles = StyleSheet.create({
   },
   helper: {
     fontSize: 15,
+    lineHeight: 22,
+  },
+  emptyCard: {
+    borderRadius: 24,
+    padding: 24,
+    gap: 10,
+  },
+  emptyTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  emptyCopy: {
+    fontSize: 14,
     lineHeight: 22,
   },
   jobCard: {

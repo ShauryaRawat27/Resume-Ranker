@@ -57,10 +57,16 @@ export default function RecruiterTabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="authentication"
+        options={{
+          title: 'Auth',
+          tabBarIcon: ({ color }) => <MaterialIcons size={26} name="verified-user" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="company"
         options={{
-          title: 'Company',
-          tabBarIcon: ({ color }) => <MaterialIcons size={26} name="apartment" color={color} />,
+          href: null,
         }}
       />
     </Tabs>

@@ -72,9 +72,10 @@ if (!response.ok) {
 }
 
 const data = JSON.parse(raw);
+const authenticatedRole = data.role ?? selectedRole;
 
 await AsyncStorage.setItem('token', data.token);
-await AsyncStorage.setItem('role', selectedRole);
+await AsyncStorage.setItem('role', authenticatedRole);
 await AsyncStorage.setItem('profile_email', email.trim());
 
 const storedName = await AsyncStorage.getItem('profile_name');
@@ -85,12 +86,12 @@ if (!storedName) {
 const savedToken = await AsyncStorage.getItem('token');
 console.log('Saved token:', savedToken);
 
-if (selectedRole === 'candidate'){
+if (authenticatedRole === 'candidate'){
   router.replace('/(user-tabs)');
   return; 
 }
 
-if (selectedRole === 'recruiter'){
+if (authenticatedRole === 'recruiter'){
   router.replace('/(recruiter-tabs)');
   return;
 }

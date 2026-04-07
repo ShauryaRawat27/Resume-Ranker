@@ -45,11 +45,11 @@ func (s *AuthService) Signup(email, password, role string) (string, error) { //T
 	return userID, nil
 }
 
-func(s *AuthService) Login(email,password string) (string,error){
+func(s *AuthService) Login(email,password string) (string,string,error){
 	id, hashedPassword, role, err := s.UserRepo.FindByEmail(email)
 
 	if err != nil{
-		return "",err
+		return "","",err
 	}
 
 	err = bcrypt.CompareHashAndPassword(
@@ -58,7 +58,7 @@ func(s *AuthService) Login(email,password string) (string,error){
 	)
 
 	if err!=nil{
-		return "",err
+		return "","",err
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256,jwt.MapClaims{
@@ -67,5 +67,10 @@ func(s *AuthService) Login(email,password string) (string,error){
 		"exp": time.Now().Add(24 * time.Hour).Unix(), //expiry
 	})
 
-	return token.SignedString(s.JWTSecret)
+	signedToken, err := token.SignedString(s.JWTSecret)
+	if err != nil {
+		return "","",err
+	}
+
+	return signedToken, role, nil
 }	

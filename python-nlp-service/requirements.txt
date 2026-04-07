@@ -3,3 +3,7 @@ uvicorn
 spacy
 sentence-transformers
 torch
+PyMuPDF
+requests
+python-dotenv
+python-multipart

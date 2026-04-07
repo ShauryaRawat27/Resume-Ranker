@@ -1,35 +1,11 @@
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { API_BASE_URL, NLP_BASE_URL } from '@/lib/api';
+import { MASTER_SKILL_SET } from '@/lib/skills';
 import { Colors, Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-
-
-const MASTER_SKILL_SET = [
-  'python', 'java', 'c', 'c++', 'c#', 'javascript', 'typescript', 'go', 'golang', 'rust',
-  'ruby', 'php', 'kotlin', 'swift', 'r', 'matlab', 'scala', 'perl', 'bash',
-  'machine learning', 'deep learning', 'artificial intelligence', 'data science', 'data analysis',
-  'statistical analysis', 'supervised learning', 'unsupervised learning', 'reinforcement learning',
-  'feature engineering', 'model evaluation', 'hyperparameter tuning', 'natural language processing',
-  'nlp', 'text classification', 'sentiment analysis', 'named entity recognition', 'transformers',
-  'bert', 'gpt', 'large language models', 'llm', 'prompt engineering', 'rag',
-  'information retrieval', 'semantic search', 'computer vision', 'image processing', 'object detection',
-  'image classification', 'segmentation', 'opencv', 'mediapipe', 'yolo', 'yolov8', 'pose estimation',
-  'optical flow', 'feature extraction', 'tensorflow', 'keras', 'pytorch', 'scikit-learn',
-  'xgboost', 'lightgbm', 'catboost', 'hugging face', 'transformers library', 'numpy', 'pandas',
-  'scipy', 'matplotlib', 'seaborn', 'plotly', 'cufflinks', 'statsmodels', 'sql', 'mysql',
-  'postgresql', 'sqlite', 'mongodb', 'dynamodb', 'redis', 'cassandra', 'elasticsearch', 'aws',
-  'ec2', 's3', 'lambda', 'ecs', 'eks', 'gcp', 'azure', 'docker', 'kubernetes', 'terraform',
-  'ci/cd', 'github actions', 'jenkins', 'rest api', 'graphql', 'fastapi', 'flask', 'django',
-  'gin', 'fiber', 'node.js', 'express', 'microservices', 'react', 'next.js', 'vue', 'angular',
-  'react native', 'flutter', 'html', 'css', 'tailwind css', 'bootstrap', 'data structures',
-  'algorithms', 'object oriented programming', 'oop', 'system design', 'design patterns',
-  'operating systems', 'computer networks', 'dbms', 'software engineering', 'git', 'github',
-  'gitlab', 'linux', 'unix', 'jupyter', 'notebook', 'hugging face spaces', 'gradio', 'streamlit',
-];
 
 type AnalysisResult = {
   skill_match: number;
@@ -149,11 +125,14 @@ export default function RecruiterLeaderboardScreen() {
       setEntries([]);
 
       const candidatesForJob = selectedApplications.filter(
-        (application) => application.ResumeText && application.ResumeText.trim()
+        (application) =>
+          application.Status === 'resume_uploaded' &&
+          application.ResumeText &&
+          application.ResumeText.trim()
       );
 
       if (candidatesForJob.length === 0) {
-        setError('No saved resume text found for this job');
+        setError('No uploaded resumes with extracted text found for this job');
         return;
       }
 
@@ -215,7 +194,7 @@ export default function RecruiterLeaderboardScreen() {
         <Text style={[styles.kicker, { color: isDark ? '#ffd5bb' : '#a0541c' }]}>Recruiter tools</Text>
         <Text style={[styles.title, { color: palette.text }]}>Candidate leaderboard</Text>
         <Text style={[styles.subtitle, { color: isDark ? '#dcc7ba' : '#765c4d' }]}>
-          Select one of your jobs and generate a ranked shortlist from saved candidate resume text.
+          Select one of your jobs and generate a ranked shortlist from uploaded resumes.
         </Text>
       </View>
 

@@ -1,150 +1,14 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
+import * as DocumentPicker from 'expo-document-picker';
+import { useCallback, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { NLP_BASE_URL } from '@/lib/api';
+import { API_BASE_URL, NLP_BASE_URL } from '@/lib/api';
+import { MASTER_SKILL_SET } from '@/lib/skills';
 import { Colors, Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-
-const MASTER_SKILL_SET = [
-  'python',
-  'java',
-  'c',
-  'c++',
-  'c#',
-  'javascript',
-  'typescript',
-  'go',
-  'golang',
-  'rust',
-  'ruby',
-  'php',
-  'kotlin',
-  'swift',
-  'r',
-  'matlab',
-  'scala',
-  'perl',
-  'bash',
-  'machine learning',
-  'deep learning',
-  'artificial intelligence',
-  'data science',
-  'data analysis',
-  'statistical analysis',
-  'supervised learning',
-  'unsupervised learning',
-  'reinforcement learning',
-  'feature engineering',
-  'model evaluation',
-  'hyperparameter tuning',
-  'natural language processing',
-  'nlp',
-  'text classification',
-  'sentiment analysis',
-  'named entity recognition',
-  'transformers',
-  'bert',
-  'gpt',
-  'large language models',
-  'llm',
-  'prompt engineering',
-  'rag',
-  'information retrieval',
-  'semantic search',
-  'computer vision',
-  'image processing',
-  'object detection',
-  'image classification',
-  'segmentation',
-  'opencv',
-  'mediapipe',
-  'yolo',
-  'yolov8',
-  'pose estimation',
-  'optical flow',
-  'feature extraction',
-  'tensorflow',
-  'keras',
-  'pytorch',
-  'scikit-learn',
-  'xgboost',
-  'lightgbm',
-  'catboost',
-  'hugging face',
-  'transformers library',
-  'numpy',
-  'pandas',
-  'scipy',
-  'matplotlib',
-  'seaborn',
-  'plotly',
-  'cufflinks',
-  'statsmodels',
-  'sql',
-  'mysql',
-  'postgresql',
-  'sqlite',
-  'mongodb',
-  'dynamodb',
-  'redis',
-  'cassandra',
-  'elasticsearch',
-  'aws',
-  'ec2',
-  's3',
-  'lambda',
-  'ecs',
-  'eks',
-  'gcp',
-  'azure',
-  'docker',
-  'kubernetes',
-  'terraform',
-  'ci/cd',
-  'github actions',
-  'jenkins',
-  'rest api',
-  'graphql',
-  'fastapi',
-  'flask',
-  'django',
-  'gin',
-  'fiber',
-  'node.js',
-  'express',
-  'microservices',
-  'react',
-  'next.js',
-  'vue',
-  'angular',
-  'react native',
-  'flutter',
-  'html',
-  'css',
-  'tailwind css',
-  'bootstrap',
-  'data structures',
-  'algorithms',
-  'object oriented programming',
-  'oop',
-  'system design',
-  'design patterns',
-  'operating systems',
-  'computer networks',
-  'dbms',
-  'software engineering',
-  'git',
-  'github',
-  'gitlab',
-  'linux',
-  'unix',
-  'jupyter',
-  'notebook',
-  'hugging face spaces',
-  'gradio',
-  'streamlit',
-];
 
 type AnalysisResult = {
   skill_match: number;
@@ -152,27 +16,135 @@ type AnalysisResult = {
   final_score: number;
   matched_skills: string[];
   missing_skills: string[];
+  sections_detected?: string[];
+  feedback?: string;
 };
+
+type BackendJob = {
+  ID: string;
+  Title: string;
+  Description: string;
+  RecruiterID: string;
+  Status: string;
+  Deadline: string;
+  CreatedAt: string;
+};
+
+function parseFeedbackSections(feedback: string) {
+  const normalized = feedback.replace(/\r/g, '').trim();
+  const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean);
+  const sections: { title: string; points: string[] }[] = [];
+
+  lines.forEach((line) => {
+    const cleaned = line.replace(/^#+\s*/, '').replace(/^\*\*(.*)\*\*$/, '$1').trim();
+    const headingMatch = cleaned.match(/^-?\s*(Overall Summary|Key Gaps|Skills Analysis|Resume Improvements|ATS Optimization Tips)\s*:?\s*$/i);
+
+    if (headingMatch) {
+      sections.push({ title: headingMatch[1], points: [] });
+      return;
+    }
+
+    const point = cleaned.replace(/^[-•*]\s*/, '').trim();
+
+    if (!sections.length) {
+      sections.push({ title: 'Recruiter Notes', points: [] });
+    }
+
+    if (point) {
+      sections[sections.length - 1].points.push(point);
+    }
+  });
+
+  return sections.length ? sections : [{ title: 'Recruiter Notes', points: [feedback] }];
+}
 
 export default function AnalysisScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
   const palette = Colors[scheme];
 
-  const [resumeText, setResumeText] = useState('');
-  const [jobDescription, setJobDescription] = useState('');
+  const [resumePdf, setResumePdf] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
+  const [jobs, setJobs] = useState<BackendJob[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState('');
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingJobs, setLoadingJobs] = useState(true);
   const [error, setError] = useState('');
 
-  const handleAnalyze = async () => {
-    if (!resumeText.trim()) {
-      setError('Resume text is required');
+  const selectedJob = jobs.find((job) => job.ID === selectedJobId);
+
+  const loadJobs = useCallback(async () => {
+    try {
+      setLoadingJobs(true);
+
+      const token = await AsyncStorage.getItem('token');
+
+      if (!token) {
+        setError('No token found');
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/jobs`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const raw = await response.text();
+
+      console.log('Analysis jobs status:', response.status);
+      console.log('Analysis jobs response:', raw);
+
+      if (!response.ok) {
+        setError('Failed to load jobs');
+        return;
+      }
+
+      const data = (JSON.parse(raw) ?? []) as BackendJob[];
+      setJobs(data);
+
+      if (!selectedJobId && data.length > 0) {
+        setSelectedJobId(data[0].ID);
+      }
+    } catch (jobsError) {
+      console.log('Analysis jobs error:', jobsError);
+      setError('Failed to load jobs');
+    } finally {
+      setLoadingJobs(false);
+    }
+  }, [selectedJobId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadJobs();
+    }, [loadJobs])
+  );
+
+  const pickResumePdf = async () => {
+    const pickerResult = await DocumentPicker.getDocumentAsync({
+      type: 'application/pdf',
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+
+    if (pickerResult.canceled) {
       return;
     }
 
-    if (!jobDescription.trim()) {
-      setError('Job description is required');
+    setResumePdf(pickerResult.assets[0] ?? null);
+    setResult(null);
+    setError('');
+  };
+
+  const handleAnalyze = async () => {
+    if (!resumePdf) {
+      setError('Resume PDF is required');
+      return;
+    }
+
+    if (!selectedJob) {
+      setError('Please select a job to analyze against');
       return;
     }
 
@@ -181,16 +153,18 @@ export default function AnalysisScreen() {
       setError('');
       setResult(null);
 
-      const response = await fetch(`${NLP_BASE_URL}/rank`, {
+      const formData = new FormData();
+      formData.append('resume_pdf', {
+        uri: resumePdf.uri,
+        name: resumePdf.name || 'resume.pdf',
+        type: resumePdf.mimeType || 'application/pdf',
+      } as unknown as Blob);
+      formData.append('job_description', selectedJob.Description.trim());
+      formData.append('skills', JSON.stringify(MASTER_SKILL_SET));
+
+      const response = await fetch(`${NLP_BASE_URL}/rank-pdf`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          resume_text: resumeText.trim(),
-          job_description: jobDescription.trim(),
-          skills: MASTER_SKILL_SET,
-        }),
+        body: formData,
       });
 
       const raw = await response.text();
@@ -213,86 +187,143 @@ export default function AnalysisScreen() {
     }
   };
 
+  const resetAnalysis = () => {
+    setResumePdf(null);
+    setSelectedJobId(jobs[0]?.ID ?? '');
+    setResult(null);
+    setError('');
+  };
+
   return (
     <ScrollView
       style={[styles.screen, { backgroundColor: palette.background }]}
       contentContainerStyle={styles.content}>
-      <View style={[styles.hero, { backgroundColor: isDark ? '#31231b' : '#fff1e5' }]}>
-        <Text style={[styles.kicker, { color: isDark ? '#ffd5bb' : '#a0541c' }]}>Candidate tools</Text>
-        <Text style={[styles.title, { color: palette.text }]}>Analyze your resume against a job.</Text>
-        <Text style={[styles.subtitle, { color: isDark ? '#dcc7ba' : '#765c4d' }]}>
-          Paste resume text and a job description to get a quick fit score, matched skills, and gaps to improve.
-        </Text>
-      </View>
-
-      <View style={[styles.card, { backgroundColor: isDark ? '#261d17' : '#fffdf9' }]}>
-        <View style={styles.section}>
-          <Text style={[styles.label, { color: palette.text }]}>Resume text</Text>
-          <TextInput
-            value={resumeText}
-            onChangeText={setResumeText}
-            placeholder="Paste your resume text here..."
-            placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
-            multiline
-            textAlignVertical="top"
-            style={[
-              styles.textArea,
-              {
-                backgroundColor: isDark ? '#332720' : '#fff5ee',
-                color: palette.text,
-                borderColor: isDark ? '#4a392f' : '#f1ddd0',
-              },
-            ]}
-          />
-        </View>
-
-        <View style={styles.section}>
-          <Text style={[styles.label, { color: palette.text }]}>Job description</Text>
-          <TextInput
-            value={jobDescription}
-            onChangeText={setJobDescription}
-            placeholder="Paste the job description here..."
-            placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
-            multiline
-            textAlignVertical="top"
-            style={[
-              styles.textArea,
-              {
-                backgroundColor: isDark ? '#332720' : '#fff5ee',
-                color: palette.text,
-                borderColor: isDark ? '#4a392f' : '#f1ddd0',
-              },
-            ]}
-          />
-        </View>
-
-        <View style={[styles.tipCard, { backgroundColor: isDark ? '#2d221b' : '#fff8f3' }]}>
-          <View style={styles.tipHeader}>
-            <MaterialIcons name="auto-awesome" size={18} color="#ff7a29" />
-            <Text style={[styles.tipTitle, { color: palette.text }]}>Current setup</Text>
+      {!result ? (
+        <>
+          <View style={[styles.hero, { backgroundColor: isDark ? '#31231b' : '#fff1e5' }]}>
+            <Text style={[styles.kicker, { color: isDark ? '#ffd5bb' : '#a0541c' }]}>Candidate tools</Text>
+            <Text style={[styles.title, { color: palette.text }]}>Analyze your resume against a job.</Text>
+            <Text style={[styles.subtitle, { color: isDark ? '#dcc7ba' : '#765c4d' }]}>
+              Choose a role, upload your resume PDF, and see your score plus improvement scope.
+            </Text>
           </View>
-          <Text style={[styles.tipCopy, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
-            This test flow uses pasted resume text for now. Later, the same input can come from extracted PDF text after upload.
-          </Text>
-        </View>
 
-        <Pressable
-          onPress={handleAnalyze}
-          disabled={loading}
-          style={[styles.primaryButton, loading && styles.disabledButton]}>
-          <Text style={styles.primaryButtonText}>
-            {loading ? 'Analyzing...' : 'Analyze Resume'}
-          </Text>
-        </Pressable>
+          <View style={[styles.card, { backgroundColor: isDark ? '#261d17' : '#fffdf9' }]}>
+            <View style={styles.section}>
+              <Text style={[styles.label, { color: palette.text }]}>Resume PDF</Text>
+              <Pressable
+                onPress={pickResumePdf}
+                style={[
+                  styles.filePicker,
+                  {
+                    backgroundColor: isDark ? '#332720' : '#fff5ee',
+                    borderColor: isDark ? '#4a392f' : '#f1ddd0',
+                  },
+                ]}>
+                <MaterialIcons name="upload-file" size={20} color="#ff7a29" />
+                <Text style={[styles.filePickerText, { color: palette.text }]}>
+                  {resumePdf ? resumePdf.name : 'Choose resume PDF'}
+                </Text>
+              </Pressable>
+            </View>
 
-        {error ? (
-          <Text style={[styles.errorText, { color: '#d9480f' }]}>{error}</Text>
-        ) : null}
-      </View>
+            <View style={styles.section}>
+              <Text style={[styles.label, { color: palette.text }]}>Choose job to compare against</Text>
+              {loadingJobs ? (
+                <Text style={[styles.emptyLine, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>Loading jobs...</Text>
+              ) : jobs.length === 0 ? (
+                <Text style={[styles.emptyLine, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
+                  No jobs available yet. Ask a recruiter account to create one first.
+                </Text>
+              ) : (
+                <View style={styles.jobOptions}>
+                  {jobs.map((job) => {
+                    const isSelected = selectedJobId === job.ID;
+
+                    return (
+                      <Pressable
+                        key={job.ID}
+                        onPress={() => {
+                          setSelectedJobId(job.ID);
+                          setResult(null);
+                          setError('');
+                        }}
+                        style={[
+                          styles.jobOption,
+                          {
+                            backgroundColor: isSelected
+                              ? isDark
+                                ? '#3d2a1f'
+                                : '#fff1e5'
+                              : isDark
+                                ? '#332720'
+                                : '#fff5ee',
+                            borderColor: isSelected ? '#ff7a29' : isDark ? '#4a392f' : '#f1ddd0',
+                          },
+                        ]}>
+                        <View style={styles.jobOptionHeader}>
+                          <Text style={[styles.jobOptionTitle, { color: palette.text }]}>{job.Title}</Text>
+                          <MaterialIcons
+                            name={isSelected ? 'radio-button-checked' : 'radio-button-unchecked'}
+                            size={20}
+                            color={isSelected ? '#ff7a29' : isDark ? '#cfb8ab' : '#8e6e5b'}
+                          />
+                        </View>
+                        <Text
+                          numberOfLines={3}
+                          style={[styles.jobOptionDescription, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
+                          {job.Description}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+
+            <View style={[styles.tipCard, { backgroundColor: isDark ? '#2d221b' : '#fff8f3' }]}>
+              <View style={styles.tipHeader}>
+                <MaterialIcons name="auto-awesome" size={18} color="#ff7a29" />
+                <Text style={[styles.tipTitle, { color: palette.text }]}>Current setup</Text>
+              </View>
+              <Text style={[styles.tipCopy, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
+                We use the selected job description from the backend, extract text from your PDF, then run multilingual scoring and OpenRouter feedback.
+              </Text>
+            </View>
+
+            <Pressable
+              onPress={handleAnalyze}
+              disabled={loading || loadingJobs || !selectedJob}
+              style={[styles.primaryButton, (loading || loadingJobs || !selectedJob) && styles.disabledButton]}>
+              <Text style={styles.primaryButtonText}>
+                {loading ? 'Analyzing...' : 'Analyze Resume'}
+              </Text>
+            </Pressable>
+
+            {error ? (
+              <Text style={[styles.errorText, { color: '#d9480f' }]}>{error}</Text>
+            ) : null}
+          </View>
+        </>
+      ) : null}
 
       {result ? (
         <View style={[styles.card, { backgroundColor: isDark ? '#261d17' : '#fffdf9' }]}>
-          <Text style={[styles.resultTitle, { color: palette.text }]}>Analysis Result</Text>
+          <View style={styles.resultHeader}>
+            <View style={styles.resultTitleBlock}>
+              <Text style={[styles.resultTitle, { color: palette.text }]}>Analysis Result</Text>
+              {selectedJob ? (
+                <Text style={[styles.resultSubtitle, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
+                  Compared against {selectedJob.Title}
+                </Text>
+              ) : null}
+            </View>
+            <Pressable
+              onPress={resetAnalysis}
+              style={[styles.secondaryButton, { borderColor: isDark ? '#7c5a47' : '#e9c8b1' }]}>
+              <Text style={[styles.secondaryButtonText, { color: palette.text }]}>Analyze another</Text>
+            </Pressable>
+          </View>
 
           <View style={styles.metricsRow}>
             <View style={[styles.metricCard, { backgroundColor: isDark ? '#2d221b' : '#fff8f3' }]}>
@@ -352,6 +383,48 @@ export default function AnalysisScreen() {
               )}
             </View>
           </View>
+
+          {result.sections_detected?.length ? (
+            <View style={styles.resultSection}>
+              <View style={styles.sectionHeader}>
+                <MaterialIcons name="segment" size={18} color="#ff7a29" />
+                <Text style={[styles.sectionTitle, { color: palette.text }]}>Detected sections</Text>
+              </View>
+              <View style={styles.chipWrap}>
+                {result.sections_detected.map((section) => (
+                  <View
+                    key={section}
+                    style={[styles.chip, { backgroundColor: isDark ? '#3d2921' : '#fff1e5' }]}>
+                    <Text style={[styles.chipText, { color: palette.text }]}>{section}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          {result.feedback ? (
+            <View style={styles.resultSection}>
+              <View style={styles.sectionHeader}>
+                <MaterialIcons name="tips-and-updates" size={18} color="#ff7a29" />
+                <Text style={[styles.sectionTitle, { color: palette.text }]}>LLM feedback</Text>
+              </View>
+              {parseFeedbackSections(result.feedback).map((section) => (
+                <View
+                  key={section.title}
+                  style={[styles.feedbackCard, { backgroundColor: isDark ? '#2d221b' : '#fff8f3' }]}>
+                  <Text style={[styles.feedbackTitle, { color: palette.text }]}>{section.title}</Text>
+                  {section.points.map((point, index) => (
+                    <View key={`${section.title}-${index}`} style={styles.feedbackPointRow}>
+                      <View style={styles.feedbackDot} />
+                      <Text style={[styles.feedbackPoint, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
+                        {point}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
+          ) : null}
         </View>
       ) : null}
     </ScrollView>
@@ -409,6 +482,45 @@ const styles = StyleSheet.create({
     minHeight: 160,
     fontSize: 15,
   },
+  filePicker: {
+    minHeight: 64,
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  filePickerText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  jobOptions: {
+    gap: 10,
+  },
+  jobOption: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 16,
+    gap: 8,
+  },
+  jobOptionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  jobOptionTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  jobOptionDescription: {
+    fontSize: 13,
+    lineHeight: 20,
+  },
   tipCard: {
     borderRadius: 18,
     padding: 16,
@@ -448,6 +560,28 @@ const styles = StyleSheet.create({
   },
   resultTitle: {
     fontSize: 24,
+    fontWeight: '800',
+  },
+  resultTitleBlock: {
+    gap: 4,
+  },
+  resultSubtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  resultHeader: {
+    gap: 12,
+  },
+  secondaryButton: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  secondaryButtonText: {
+    fontSize: 13,
     fontWeight: '800',
   },
   metricsRow: {
@@ -497,5 +631,33 @@ const styles = StyleSheet.create({
   emptyLine: {
     fontSize: 14,
     lineHeight: 22,
+  },
+  feedbackCard: {
+    borderRadius: 18,
+    padding: 16,
+    gap: 10,
+  },
+  feedbackTitle: {
+    fontSize: 17,
+    fontFamily: Fonts.serif,
+    fontWeight: '900',
+  },
+  feedbackPointRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  feedbackDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: '#ff7a29',
+    marginTop: 7,
+  },
+  feedbackPoint: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: '600',
   },
 });

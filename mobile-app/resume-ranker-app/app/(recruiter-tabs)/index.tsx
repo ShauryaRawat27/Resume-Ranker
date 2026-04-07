@@ -1,19 +1,131 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { API_BASE_URL } from '@/lib/api';
 import { Colors, Fonts } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-const stages = [
-  { label: 'Applied', value: 124, tone: '#868e96' },
-  { label: 'Reviewed', value: 38, tone: '#f08c00' },
-  { label: 'Shortlisted', value: 12, tone: '#2f9e44' },
-];
+type BackendApplication = {
+  ID: string;
+  JobID: string;
+  CandidateID: string;
+  AppliedAt: string;
+  ResumeUrl?: string;
+  Status: string;
+};
+
+type BackendJob = {
+  ID: string;
+  Title: string;
+  Description: string;
+  RecruiterID: string;
+  Status: string;
+  Deadline: string;
+  CreatedAt: string;
+};
 
 export default function RecruiterPipelineScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
   const palette = Colors[scheme];
+  const [jobs, setJobs] = useState<BackendJob[]>([]);
+  const [applications, setApplications] = useState<BackendApplication[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const loadPipeline = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError('');
+
+      const token = await AsyncStorage.getItem('token');
+
+      if (!token) {
+        setError('No token found');
+        return;
+      }
+
+      const [jobsResponse, applicationsResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/jobs`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }),
+        fetch(`${API_BASE_URL}/applications`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }),
+      ]);
+
+      const jobsRaw = await jobsResponse.text();
+      const applicationsRaw = await applicationsResponse.text();
+
+      console.log('Recruiter home jobs status:', jobsResponse.status);
+      console.log('Recruiter home applications status:', applicationsResponse.status);
+
+      if (!jobsResponse.ok || !applicationsResponse.ok) {
+        setError('Failed to load recruiter dashboard');
+        return;
+      }
+
+      setJobs((JSON.parse(jobsRaw) ?? []) as BackendJob[]);
+      setApplications((JSON.parse(applicationsRaw) ?? []) as BackendApplication[]);
+    } catch (pipelineError) {
+      console.log('Recruiter home error:', pipelineError);
+      setError('Something went wrong');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadPipeline();
+    }, [loadPipeline])
+  );
+
+  const uploadedApplications = applications.filter((application) => application.Status === 'resume_uploaded');
+  const pendingApplications = applications.filter((application) => application.Status === 'resume_pending');
+  const openJobs = jobs.filter((job) => job.Status.toLowerCase() === 'open');
+  const applicationsByJobId = applications.reduce<Record<string, BackendApplication[]>>((acc, application) => {
+    acc[application.JobID] = [...(acc[application.JobID] ?? []), application];
+    return acc;
+  }, {});
+  const priorityJob = [...jobs].sort(
+    (first, second) =>
+      (applicationsByJobId[second.ID]?.length ?? 0) - (applicationsByJobId[first.ID]?.length ?? 0)
+  )[0];
+  const priorityApplications = priorityJob ? applicationsByJobId[priorityJob.ID] ?? [] : [];
+  const priorityUploadedCount = priorityApplications.filter(
+    (application) => application.Status === 'resume_uploaded'
+  ).length;
+  const stages = [
+    { label: 'Open jobs', value: openJobs.length, tone: '#868e96' },
+    { label: 'Applicants', value: applications.length, tone: '#f08c00' },
+    { label: 'Resumes ready', value: uploadedApplications.length, tone: '#2f9e44' },
+  ];
+
+  if (loading) {
+    return (
+      <View style={[styles.stateScreen, { backgroundColor: palette.background }]}>
+        <Text style={[styles.stateText, { color: palette.text }]}>Loading recruiter dashboard...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.stateScreen, { backgroundColor: palette.background }]}>
+        <Text style={[styles.stateText, { color: palette.text }]}>{error}</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -21,9 +133,9 @@ export default function RecruiterPipelineScreen() {
       contentContainerStyle={styles.content}>
       <View style={[styles.hero, { backgroundColor: isDark ? '#31231b' : '#fff1e5' }]}>
         <Text style={[styles.kicker, { color: isDark ? '#ffd5bb' : '#a0541c' }]}>Recruiter workspace</Text>
-        <Text style={[styles.title, { color: palette.text }]}>Keep hiring organized across every opening.</Text>
+        <Text style={[styles.title, { color: palette.text }]}>Your hiring pipeline at a glance.</Text>
         <Text style={[styles.subtitle, { color: isDark ? '#dcc7ba' : '#765c4d' }]}>
-          Review match quality, see candidate movement, and decide where to spend screening time first.
+          Track live jobs, resume uploads, and where candidate follow-up is needed.
         </Text>
       </View>
 
@@ -44,32 +156,43 @@ export default function RecruiterPipelineScreen() {
         ))}
       </View>
 
-      <View style={[styles.card, { backgroundColor: isDark ? '#261d17' : '#fffdf9' }]}>
-        <View style={styles.cardHeader}>
-          <View>
-            <Text style={[styles.cardTitle, { color: palette.text }]}>Hiring priority</Text>
-            <Text style={[styles.cardSubtitle, { color: isDark ? '#d2bfb2' : '#846b5d' }]}>
-              Senior Frontend Engineer, Orbit Labs
+      {jobs.length === 0 ? (
+        <View style={[styles.card, { backgroundColor: isDark ? '#261d17' : '#fffdf9' }]}>
+          <Text style={[styles.cardTitle, { color: palette.text }]}>No jobs created yet</Text>
+          <Text style={[styles.insightText, { color: isDark ? '#d2bfb2' : '#846b5d' }]}>
+            Create your first job so applicants, resume uploads, and ranking activity can appear here.
+          </Text>
+        </View>
+      ) : (
+        <View style={[styles.card, { backgroundColor: isDark ? '#261d17' : '#fffdf9' }]}>
+          <View style={styles.cardHeader}>
+            <View>
+              <Text style={[styles.cardTitle, { color: palette.text }]}>Most active opening</Text>
+              <Text style={[styles.cardSubtitle, { color: isDark ? '#d2bfb2' : '#846b5d' }]}>
+                {priorityJob?.Title ?? 'No active opening'}
+              </Text>
+            </View>
+            <View style={[styles.scoreBadge, { backgroundColor: isDark ? '#3d2a1f' : '#fff2e7' }]}>
+              <Text style={styles.scoreText}>{priorityApplications.length} applicants</Text>
+            </View>
+          </View>
+
+          <View style={styles.insightRow}>
+            <MaterialIcons name="upload-file" size={18} color="#ff7a29" />
+            <Text style={[styles.insightText, { color: palette.text }]}>
+              {priorityUploadedCount} of {priorityApplications.length} applicants have uploaded resumes for this job.
             </Text>
           </View>
-          <View style={[styles.scoreBadge, { backgroundColor: isDark ? '#3d2a1f' : '#fff2e7' }]}>
-            <Text style={styles.scoreText}>12 strong fits</Text>
+          <View style={styles.insightRow}>
+            <MaterialIcons name="schedule" size={18} color="#2f9e44" />
+            <Text style={[styles.insightText, { color: palette.text }]}>
+              {pendingApplications.length > 0
+                ? `${pendingApplications.length} applicants still need to upload resumes before ranking is useful.`
+                : 'All current applicants with submitted applications are ready for review or ranking.'}
+            </Text>
           </View>
         </View>
-
-        <View style={styles.insightRow}>
-          <MaterialIcons name="insights" size={18} color="#ff7a29" />
-          <Text style={[styles.insightText, { color: palette.text }]}>
-            Most drop-offs are happening on automated testing and metrics-based experience.
-          </Text>
-        </View>
-        <View style={styles.insightRow}>
-          <MaterialIcons name="schedule" size={18} color="#2f9e44" />
-          <Text style={[styles.insightText, { color: palette.text }]}>
-            Reviewing the top 20 applicants first should cover nearly all profiles above 80% fit.
-          </Text>
-        </View>
-      </View>
+      )}
     </ScrollView>
   );
 }
@@ -83,6 +206,17 @@ const styles = StyleSheet.create({
     paddingTop: 72,
     paddingBottom: 120,
     gap: 18,
+  },
+  stateScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  stateText: {
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   hero: {
     borderRadius: 28,

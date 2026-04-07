@@ -10,12 +10,6 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
 import { API_BASE_URL } from '@/lib/api';
 
-// const weeklyWins = [
-//   { label: 'Resume score', value: '86', tone: '#2f9e44' },
-//   { label: 'Matched skills', value: '14', tone: '#ff7a29' },
-//   { label: 'Missing skills', value: '3', tone: '#d9480f' },
-// ];
-
 type BackendApplication = {
   ID: string;
   JobID: string;
@@ -26,13 +20,15 @@ type BackendApplication = {
   ResumeText?: string;
 };
 
-
-
-const checklist = [
-  'Add one measurable impact bullet to your latest role.',
-  'Move React Native and TypeScript into the top skills block.',
-  'Shorten the summary so recruiters see experience faster.',
-];
+type BackendJob = {
+  ID: string;
+  Title: string;
+  Description: string;
+  RecruiterID: string;
+  Status: string;
+  Deadline: string;
+  CreatedAt: string;
+};
 
 export default function DashboardScreen() {
   const scheme = useColorScheme() ?? 'light';
@@ -40,35 +36,90 @@ export default function DashboardScreen() {
   const palette = Colors[scheme];
 
   const [applications, setApplications] = useState<BackendApplication[]>([]);
+  const [jobs, setJobs] = useState<BackendJob[]>([]);
 
 
-  const loadApplications = useCallback(async () => {
+  const loadDashboardData = useCallback(async () => {
     const token = await AsyncStorage.getItem('token');
 
     if (!token) {
       return;
     }
 
-    const response = await fetch(`${API_BASE_URL}/applications`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    const [applicationsResponse, jobsResponse] = await Promise.all([
+      fetch(`${API_BASE_URL}/applications`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }),
+      fetch(`${API_BASE_URL}/jobs`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }),
+    ]);
 
-    if (!response.ok) {
-      return;
+    if (applicationsResponse.ok) {
+      const applicationData = (await applicationsResponse.json()) as BackendApplication[];
+      setApplications(applicationData ?? []);
     }
 
-    const data = (await response.json()) as BackendApplication[];
-    setApplications(data ?? []);
+    if (jobsResponse.ok) {
+      const jobData = (await jobsResponse.json()) as BackendJob[];
+      setJobs(jobData ?? []);
+    }
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      void loadApplications();
-    }, [loadApplications])
+      void loadDashboardData();
+    }, [loadDashboardData])
   );
+
+  const latestApplication = [...applications].sort(
+    (a, b) => new Date(b.AppliedAt).getTime() - new Date(a.AppliedAt).getTime()
+  )[0];
+  const latestJob = latestApplication
+    ? jobs.find((job) => job.ID === latestApplication.JobID)
+    : undefined;
+  const targetRoleTitle = latestJob?.Title ?? (latestApplication ? latestApplication.JobID : 'No target role yet');
+  const targetRoleSubtitle = latestApplication
+    ? latestApplication.Status === 'resume_uploaded'
+      ? 'Resume uploaded for this application'
+      : 'Resume upload pending for this application'
+    : 'Apply to a job to make this dashboard personal';
+  const targetRoleBadge = latestApplication
+    ? latestApplication.Status === 'resume_uploaded'
+      ? 'Ready'
+      : 'Pending'
+    : 'Start';
+  const targetProgress = latestApplication
+    ? latestApplication.Status === 'resume_uploaded'
+      ? '100%'
+      : '50%'
+    : '0%';
+  const secondSignal = latestJob
+    ? 'Run resume analysis against this job description before the presentation.'
+    : 'Create or apply to jobs so this card can show real role context.';
+  const quickImprovements = latestApplication
+    ? latestApplication.Status === 'resume_uploaded'
+      ? [
+          'Analyze your resume against the latest job description.',
+          'Review missing skills from the analysis result.',
+          'Use the LLM feedback to tighten your resume before applying again.',
+        ]
+      : [
+          'Upload your resume for the latest application.',
+          'Run the PDF analysis against that job description.',
+          'Save or update resume text so recruiter ranking has useful data.',
+        ]
+    : [
+        'Apply to a job from the Jobs tab.',
+        'Upload a resume PDF in the Analysis tab.',
+        'Paste a job description to generate real LLM feedback.',
+      ];
 
   const dashboardStats= [
     {label: 'Applied jobs', value: String(applications.length), tone:'#2f9e44'},
@@ -139,26 +190,26 @@ export default function DashboardScreen() {
           <View>
             <Text style={[styles.cardTitle, { color: palette.text }]}>Target role</Text>
             <Text style={[styles.cardSubtitle, { color: isDark ? '#d3c0b3' : '#846b5d' }]}>
-              Senior Frontend Developer at Orbit Labs
+              {targetRoleTitle}
             </Text>
           </View>
           <View style={[styles.scoreBadge, { backgroundColor: isDark ? '#3d2a1f' : '#fff1e5' }]}>
-            <Text style={styles.scoreBadgeText}>86%</Text>
+            <Text style={styles.scoreBadgeText}>{targetRoleBadge}</Text>
           </View>
         </View>
 
         <View style={styles.progressTrack}>
-          <View style={[styles.progressValue, { width: '86%' }]} />
+          <View style={[styles.progressValue, { width: targetProgress }]} />
         </View>
 
         <View style={styles.signalRow}>
           <View style={styles.signalItem}>
             <MaterialIcons name="check-circle" size={18} color="#2f9e44" />
-            <Text style={[styles.signalText, { color: palette.text }]}>Strong on React, UI systems, and APIs</Text>
+            <Text style={[styles.signalText, { color: palette.text }]}>{targetRoleSubtitle}</Text>
           </View>
           <View style={styles.signalItem}>
             <MaterialIcons name="error-outline" size={18} color="#d9480f" />
-            <Text style={[styles.signalText, { color: palette.text }]}>Needs stronger metrics and testing language</Text>
+            <Text style={[styles.signalText, { color: palette.text }]}>{secondSignal}</Text>
           </View>
         </View>
       </View>
@@ -168,8 +219,8 @@ export default function DashboardScreen() {
           <Text style={[styles.cardTitle, { color: palette.text }]}>Quick improvements</Text>
           <MaterialIcons name="auto-awesome" size={18} color="#ff7a29" />
         </View>
-        {checklist.map((item, index) => (
-          <View key={item} style={[styles.checklistItem, index === checklist.length - 1 && styles.lastChecklistItem]}>
+        {quickImprovements.map((item, index) => (
+          <View key={item} style={[styles.checklistItem, index === quickImprovements.length - 1 && styles.lastChecklistItem]}>
             <View style={[styles.checklistDot, { backgroundColor: '#ff7a29' }]} />
             <Text style={[styles.checklistText, { color: palette.text }]}>{item}</Text>
           </View>

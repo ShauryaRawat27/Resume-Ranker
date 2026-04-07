@@ -1,11 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
+import * as DocumentPicker from 'expo-document-picker';
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { API_BASE_URL } from '@/lib/api';
+import { API_BASE_URL, NLP_BASE_URL } from '@/lib/api';
+import { MASTER_SKILL_SET } from '@/lib/skills';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+
+const JOB_SCORE_STORAGE_KEY = 'job_score_by_job_id';
 
 type BackendApplication = {
   ID: string;
@@ -27,6 +31,53 @@ type BackendJob = {
   CreatedAt: string;
 };
 
+type AnalysisResult = {
+  final_score: number;
+  extracted_resume_text?: string;
+};
+
+function getScoreLabel(score: number) {
+  if (score >= 80) {
+    return 'Strong match';
+  }
+
+  if (score >= 60) {
+    return 'Good potential';
+  }
+
+  return 'Needs tuning';
+}
+
+function ScoreInsight({ score, dark }: { score: number; dark: boolean }) {
+  const roundedScore = Math.max(0, Math.min(100, Math.round(score)));
+  const scoreLabel = getScoreLabel(roundedScore);
+  const accent = roundedScore >= 80 ? '#2f9e44' : roundedScore >= 60 ? '#ff922b' : '#ef5548';
+
+  return (
+    <View style={[styles.scoreInsightCard, { backgroundColor: dark ? '#1d1a20' : '#fff8f3' }]}>
+      <View style={styles.scoreInsightHeader}>
+        <View>
+          <Text style={[styles.scoreKicker, { color: dark ? '#e8d5c8' : '#9a4d16' }]}>
+            Resume fit
+          </Text>
+          <Text style={[styles.scoreNumber, { color: dark ? '#f2edf4' : '#261d17' }]}>
+            {roundedScore}%
+          </Text>
+        </View>
+        <View style={[styles.scoreBadge, { backgroundColor: `${accent}22` }]}>
+          <Text style={[styles.scoreBadgeText, { color: accent }]}>{scoreLabel}</Text>
+        </View>
+      </View>
+      <View style={[styles.scoreTrack, { backgroundColor: dark ? '#3b343f' : '#eaded7' }]}>
+        <View style={[styles.scoreFill, { width: `${roundedScore}%`, backgroundColor: accent }]} />
+      </View>
+      <Text style={[styles.scoreHint, { color: dark ? '#d6c1b5' : '#7a6152' }]}>
+        Based on the uploaded resume against this job description.
+      </Text>
+    </View>
+  );
+}
+
 export default function ApplicationsScreen() {
   const scheme = useColorScheme() ?? 'light';
   const isDark = scheme === 'dark';
@@ -35,9 +86,21 @@ export default function ApplicationsScreen() {
   const [jobTitleById, setJobTitleById] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [resumeTextByApplicationId, setResumeTextByApplicationId] = useState<Record<string, string>>({});
-  const [savingApplicationId, setSavingApplicationId] = useState<string | null>(null);
-  const [savedMessageByApplicationId, setSavedMessageByApplicationId] = useState<Record<string, string>>({});
+  const [scoreByJobId, setScoreByJobId] = useState<Record<string, number>>({});
+  const [jobDescriptionById, setJobDescriptionById] = useState<Record<string, string>>({});
+  const [updatingApplicationId, setUpdatingApplicationId] = useState<string | null>(null);
+
+  const saveJobScore = async (jobId: string, score: number) => {
+    const storedScores = await AsyncStorage.getItem(JOB_SCORE_STORAGE_KEY);
+    const current = storedScores ? JSON.parse(storedScores) : {};
+    const next = {
+      ...current,
+      [jobId]: score,
+    };
+
+    await AsyncStorage.setItem(JOB_SCORE_STORAGE_KEY, JSON.stringify(next));
+    setScoreByJobId(next);
+  };
 
   const loadApplications = useCallback(async () => {
     try {
@@ -78,17 +141,17 @@ export default function ApplicationsScreen() {
       }
 
       const applicationData = (JSON.parse(applicationsRaw) ?? []) as BackendApplication[];
+      const storedScores = await AsyncStorage.getItem(JOB_SCORE_STORAGE_KEY);
       setApplications(applicationData);
-      setResumeTextByApplicationId(
-        Object.fromEntries(
-          applicationData.map((application) => [application.ID, application.ResumeText ?? ''])
-        )
-      );
+      setScoreByJobId(storedScores ? JSON.parse(storedScores) : {});
 
       if (jobsResponse.ok) {
         const jobsData = JSON.parse(jobsRaw) as BackendJob[];
         setJobTitleById(
           Object.fromEntries(jobsData.map((job) => [job.ID, job.Title]))
+        );
+        setJobDescriptionById(
+          Object.fromEntries(jobsData.map((job) => [job.ID, job.Description]))
         );
       }
     } catch (loadError) {
@@ -99,58 +162,163 @@ export default function ApplicationsScreen() {
     }
   }, []);
 
-  const saveResumeText = async (applicationId: string) => {
+  const saveExtractedResumeText = async (applicationId: string, resumeText?: string) => {
+    if (!resumeText?.trim()) {
+      return;
+    }
+
+    const token = await AsyncStorage.getItem('token');
+
+    if (!token) {
+      return;
+    }
+
+    const response = await fetch(`${API_BASE_URL}/applications/${applicationId}/resume-text`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        resume_text: resumeText,
+      }),
+    });
+
+    const raw = await response.text();
+
+    console.log('Update extracted resume text status:', response.status);
+    console.log('Update extracted resume text response:', raw);
+  };
+
+  const updateResumeAndRescore = async (application: BackendApplication) => {
     try {
-      setSavingApplicationId(applicationId);
       const token = await AsyncStorage.getItem('token');
+      const jobDescription = jobDescriptionById[application.JobID];
 
       if (!token) {
-        setSavedMessageByApplicationId((current) => ({
-          ...current,
-          [applicationId]: 'No token found',
-        }));
+        setError('No token found');
         return;
       }
 
-      const response = await fetch(
-        `${API_BASE_URL}/applications/${applicationId}/resume-text`,
+      if (!jobDescription) {
+        setError('Job description not found for scoring');
+        return;
+      }
+
+      const pickerResult = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (pickerResult.canceled) {
+        return;
+      }
+
+      const file = pickerResult.assets[0];
+
+      if (!file) {
+        return;
+      }
+
+      setUpdatingApplicationId(application.ID);
+      setError('');
+
+      const presignResponse = await fetch(
+        `${API_BASE_URL}/applications/${application.ID}/resume/presign`,
         {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({
-            resume_text: resumeTextByApplicationId[applicationId] ?? '',
-          }),
         }
       );
 
-      const raw = await response.text();
+      const presignRaw = await presignResponse.text();
 
-      console.log('Save resume text status:', response.status);
-      console.log('Save resume text response:', raw);
-
-      if (!response.ok) {
-        setSavedMessageByApplicationId((current) => ({
-          ...current,
-          [applicationId]: 'Failed to save resume text',
-        }));
+      if (!presignResponse.ok) {
+        console.log('Applied resume presign failed:', presignRaw);
+        setError('Failed to prepare resume upload');
         return;
       }
 
-      setSavedMessageByApplicationId((current) => ({
-        ...current,
-        [applicationId]: 'Resume text saved to backend',
-      }));
-    } catch (saveError) {
-      console.log('Resume text save error:', saveError);
-      setSavedMessageByApplicationId((current) => ({
-        ...current,
-        [applicationId]: 'Failed to save resume text',
-      }));
+      const presignData = JSON.parse(presignRaw);
+      const uploadUrl = presignData.upload_url;
+
+      if (!uploadUrl) {
+        setError('Upload URL missing');
+        return;
+      }
+
+      const fileResponse = await fetch(file.uri);
+      const fileBlob = await fileResponse.blob();
+
+      const uploadResponse = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/pdf',
+        },
+        body: fileBlob,
+      });
+
+      const uploadRaw = await uploadResponse.text();
+
+      if (!uploadResponse.ok) {
+        console.log('Applied resume upload failed:', uploadRaw);
+        setError('Failed to upload resume');
+        return;
+      }
+
+      const confirmResponse = await fetch(
+        `${API_BASE_URL}/applications/${application.ID}/resume/confirm`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const confirmRaw = await confirmResponse.text();
+
+      if (!confirmResponse.ok) {
+        console.log('Applied resume confirm failed:', confirmRaw);
+        setError('Failed to confirm resume upload');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('resume_pdf', {
+        uri: file.uri,
+        name: file.name || 'resume.pdf',
+        type: file.mimeType || 'application/pdf',
+      } as unknown as Blob);
+      formData.append('job_description', jobDescription);
+      formData.append('skills', JSON.stringify(MASTER_SKILL_SET));
+
+      const scoreResponse = await fetch(`${NLP_BASE_URL}/rank-pdf`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const scoreRaw = await scoreResponse.text();
+
+      if (!scoreResponse.ok) {
+        console.log('Applied resume scoring failed:', scoreRaw);
+        setError('Resume uploaded, but scoring failed');
+        await loadApplications();
+        return;
+      }
+
+      const scoreData = JSON.parse(scoreRaw) as AnalysisResult;
+      await saveJobScore(application.JobID, scoreData.final_score);
+      await saveExtractedResumeText(application.ID, scoreData.extracted_resume_text);
+      await loadApplications();
+    } catch (updateError) {
+      console.log('Update resume error:', updateError);
+      setError('Failed to update resume');
     } finally {
-      setSavingApplicationId(null);
+      setUpdatingApplicationId(null);
     }
   };
 
@@ -197,6 +365,8 @@ export default function ApplicationsScreen() {
       ) : (
         applications.map((application) => {
           const title = jobTitleById[application.JobID] ?? application.JobID;
+          const finalScore = scoreByJobId[application.JobID];
+          const isUpdating = updatingApplicationId === application.ID;
           const statusLabel =
             application.Status === 'resume_uploaded'
               ? 'Resume uploaded'
@@ -246,46 +416,32 @@ export default function ApplicationsScreen() {
                 {application.ID}
               </Text>
 
-              <Text style={[styles.metaLabel, { color: isDark ? '#e8d5c8' : '#9a4d16' }]}>
-                Resume text for NLP
-              </Text>
-              <TextInput
-                value={resumeTextByApplicationId[application.ID] ?? ''}
-                onChangeText={(text) => {
-                  setResumeTextByApplicationId((current) => ({
-                    ...current,
-                    [application.ID]: text,
-                  }));
-                  setSavedMessageByApplicationId((current) => ({
-                    ...current,
-                    [application.ID]: '',
-                  }));
-                }}
-                placeholder="Paste resume text here for now. We can use this later for NLP scoring."
-                placeholderTextColor={isDark ? '#a69082' : '#9f8373'}
-                multiline
-                textAlignVertical="top"
-                style={[
-                  styles.resumeTextArea,
-                  {
-                    backgroundColor: isDark ? '#332720' : '#fff5ee',
-                    color: palette.text,
-                    borderColor: isDark ? '#4a392f' : '#f1ddd0',
-                  },
-                ]}
-              />
-              <Pressable
-                onPress={() => saveResumeText(application.ID)}
-                disabled={savingApplicationId === application.ID}
-                style={[styles.saveButton, savingApplicationId === application.ID && styles.pendingButton]}>
-                <Text style={styles.saveButtonText}>
-                  {savingApplicationId === application.ID ? 'Saving...' : 'Save Resume Text'}
-                </Text>
-              </Pressable>
-              {savedMessageByApplicationId[application.ID] ? (
-                <Text style={[styles.savedNote, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
-                  {savedMessageByApplicationId[application.ID]}
-                </Text>
+              {application.Status === 'resume_uploaded' && typeof finalScore === 'number' ? (
+                <View style={styles.scoreSection}>
+                  <ScoreInsight score={finalScore} dark={isDark} />
+                </View>
+              ) : null}
+
+              {application.Status === 'resume_uploaded' && typeof finalScore !== 'number' ? (
+                <View style={[styles.scoreMissingCard, { backgroundColor: isDark ? '#1d1a20' : '#fff8f3' }]}>
+                  <Text style={[styles.scoreKicker, { color: isDark ? '#e8d5c8' : '#9a4d16' }]}>
+                    Resume fit
+                  </Text>
+                  <Text style={[styles.scoreHint, { color: isDark ? '#d6c1b5' : '#7a6152' }]}>
+                    Score not generated yet. Update the resume once to calculate it for this job.
+                  </Text>
+                </View>
+              ) : null}
+
+              {application.Status === 'resume_uploaded' ? (
+                <Pressable
+                  onPress={() => updateResumeAndRescore(application)}
+                  disabled={isUpdating}
+                  style={[styles.updateButton, isUpdating && styles.pendingButton]}>
+                  <Text style={styles.updateButtonText}>
+                    {isUpdating ? 'Updating & scoring...' : 'Update Resume & Rescore'}
+                  </Text>
+                </Pressable>
               ) : null}
             </View>
           );
@@ -377,16 +533,63 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
   },
-  resumeTextArea: {
-    borderWidth: 1,
-    borderRadius: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    minHeight: 140,
-    fontSize: 15,
+  scoreSection: {
+    marginTop: 8,
   },
-  saveButton: {
-    marginTop: 4,
+  scoreMissingCard: {
+    borderRadius: 22,
+    padding: 18,
+    gap: 8,
+    marginTop: 8,
+  },
+  scoreInsightCard: {
+    borderRadius: 22,
+    padding: 18,
+    gap: 14,
+  },
+  scoreInsightHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 14,
+  },
+  scoreKicker: {
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  scoreNumber: {
+    marginTop: 2,
+    fontSize: 42,
+    lineHeight: 48,
+    fontWeight: '900',
+  },
+  scoreBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  scoreBadgeText: {
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  scoreTrack: {
+    height: 12,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  scoreFill: {
+    height: '100%',
+    borderRadius: 999,
+  },
+  scoreHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+  },
+  updateButton: {
+    marginTop: 6,
     borderRadius: 16,
     paddingVertical: 14,
     alignItems: 'center',
@@ -395,13 +598,9 @@ const styles = StyleSheet.create({
   pendingButton: {
     opacity: 0.75,
   },
-  saveButtonText: {
+  updateButtonText: {
     color: '#f4fbff',
     fontSize: 15,
     fontWeight: '800',
-  },
-  savedNote: {
-    fontSize: 13,
-    fontWeight: '700',
   },
 });

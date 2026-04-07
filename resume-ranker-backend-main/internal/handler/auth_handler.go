@@ -69,7 +69,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.AuthService.Login(input.Email, input.Password)
+	token, role, err := h.AuthService.Login(input.Email, input.Password)
 	if err != nil {
 		http.Error(w, "INVALID CREDENTIALS", http.StatusUnauthorized)
 		return
@@ -77,5 +77,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"token": token,
+		"role": role,
 	})
 }
