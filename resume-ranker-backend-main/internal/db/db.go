@@ -3,14 +3,20 @@ package db
 import (
 	"database/sql"
 	"log"
+	"os"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func Connect() *sql.DB {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://localhost/resume_ranker?sslmode=disable"
+	}
+
 	database, err := sql.Open( //sql.open - prepares a conncn pool,not connecting yet
 		"pgx",
-		"postgres://localhost/resume_ranker?sslmode=disable",
+		dsn,
 	)
 
 	if err != nil {
